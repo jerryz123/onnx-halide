@@ -1,6 +1,8 @@
 import numpy as np
 from onnx.backend.base import Backend
 from onnx import helper, TensorProto
+import subprocess
+from .backend_rep import HalideBackendRep
 
 class HalideBackend(Backend):
     # @staticmethod
@@ -23,7 +25,7 @@ class HalideBackend(Backend):
             raise ValueError(
                 "Unexpected Input Size: Op_Type = {0}, Expected = {1}, Received = {2}"
                 .format(node.op_type, len(node.input), len(input))
-                ) 
+                )
 
         for i in range(len(input)):
             input_tensors.append(helper.make_tensor_value_info(node.input[i], TensorProto.FLOAT, input[i].shape))
@@ -33,29 +35,8 @@ class HalideBackend(Backend):
         return HalideBackend.run_model(onnx_model, input, device)
 
     @classmethod
-    def generate_halide(cls, model):
-
-        halide_str = """"""
-        buffers = {}
-        print(type(model.graph))
-        for init in model.graph.initializer:
-            dims      = init.dims
-            data_type = init.data_type
-            name      = init.name
-            raw_data  = init.raw_data
-
-            s_data_type = {k: v for (v, k) in TensorProto.DataType.items()}[init.data_type]
-            c_typ = {"FLOAT" : "float*"}[s_data_type]
-            if init.raw_data:
-                halide_str += "char* raw_{} = {};\n".format(init.name, init.raw_data)
-                halide_str += "{0} {1} = ({0}) raw_{1};\n".format(c_typ, init.name, init.name)
-                #halide_str += "{} {};".format(c_typ, init.name)
-
-        return halide_str
-    @classmethod
     def run_model(cls, model, input, device='CPU'):
-        halide_str = HalideBackend.generate_halide(model)
-        print(halide_str)
+        rep = HalideBackendRep(model)
         raise NotImplementedError
 
     @classmethod
