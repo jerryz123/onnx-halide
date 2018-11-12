@@ -41,7 +41,7 @@ class HalideBackend(Backend):
 
     @classmethod
     def prepare(cls, model, device='CPU', **kwargs):
-        raise NotImplementedError
+        return HalideBackendRep(model)
     @classmethod
     def supports_device(cls, device='CPU'):
         return device in ['CPU']
