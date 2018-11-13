@@ -11,18 +11,24 @@ from math import floor, ceil
 HALIDE_DIR = "/home/jerry/Projects/Halide"
 
 ONNX_TYPE_DECODER = lambda x:{k: v for (v, k) in TensorProto.DataType.items()}[x]
-C_TYPE_DECODER = lambda x: {"FLOAT" : "float",
-                            "BOOL"  : "int8_t",
-                            "INT64" : "int64_t"}\
+C_TYPE_DECODER = lambda x: {"FLOAT16": "float16_t",
+                            "FLOAT"  : "float",
+                            "DOUBLE" : "double",
+                            "BOOL"   : "int8_t",
+                            "INT64"  : "int64_t"}\
                  [ONNX_TYPE_DECODER(x)]
 
-NP_TYPE_DECODER = lambda x: {"float"   : np.float32,
-                             "int8_t"  : np.bool,
-                             "int64_t" : np.int64}[x]
+NP_TYPE_DECODER = lambda x: {"float16_t": np.float16,
+                             "float"    : np.float32,
+                             "double"   : np.float64,
+                             "int8_t"   : np.bool,
+                             "int64_t"  : np.int64}[x]
 
-CTYPE_TYPE_DECODER = lambda x: {"float"   : ctypes.c_float,
-                                "int8_t"  : ctypes.c_char,
-                                "int64_t" : ctypes.c_longlong}[x]
+CTYPE_TYPE_DECODER = lambda x: {"float16_t": ctypes.c_short,
+                                "float"    : ctypes.c_float,
+                                "double"   : ctypes.c_double,
+                                "int8_t"   : ctypes.c_char,
+                                "int64_t"  : ctypes.c_longlong}[x]
 
 
 class HalideObj:
@@ -45,6 +51,9 @@ class HalideObj:
     def set_shape(self, shape):
         assert(not self._shape)
         self._shape = shape
+    def set_type(self, type):
+        assert(not self._type_str)
+        self._type_str = type
     def __repr__(self):
         return "({}, {}, {})".format(self._name,
                                      self._shape,
@@ -189,22 +198,11 @@ class HalideBackendRep(BackendRep):
 
         # Realize the output funcs into output buffesr
         for tensor, _ in outputs:
-            func_name  = self.funcs[tensor.name].name
-            func_shape = self.funcs[tensor.name].shape
-            buf_name   = self.buffers[tensor.name].name
-            buf_shape  = self.buffers[tensor.name].shape
-            buf_type   = self.buffers[tensor.name].type
-            self.generate_func("{}_casted".format(func_name))
-            self.cpp("{", 1)
-            dim_vars = self.generate_dim_vars(len(buf_shape))
-            self.cpp("{}_casted({}) = cast<{}>({}({}));".format(
-                func_name, ",".join(dim_vars),
-                buf_type,
-                func_name, ",".join(dim_vars)))
-            self.cpp("};", -1)
-            self.cpp("{}_casted.realize({});".format(func_name, buf_name))
-            if not (func_shape == buf_shape):
-                print("{} != {}".format(func_shape, buf_shape))
+            func = self.funcs[tensor.name]
+            buf  = self.buffers[tensor.name]
+            self.cpp("{}.realize({});".format(func_name, buf.name))
+            if not (func.shape == buf.shape and func.type == buf.type):
+                print("{}{} != {}{}".format(func.type, func.shape, buf.type, buf.shape))
                 print(self.halide_str)
                 exit(1)
 
@@ -318,20 +316,22 @@ class HalideBackendRep(BackendRep):
         return dim_vars
 
     def generate_unary_expr(self, node, expr):
-        ip_fn    = self.funcs[node.input[0]].name
-        op_fn    = self.funcs[node.output[0]].name
-        ip_shape = self.funcs[node.input[0]].shape
-        dim_vars = self.generate_dim_vars(len(ip_shape))
+        ip    = self.funcs[node.input[0]]
+        op    = self.funcs[node.output[0]]
+
+        dim_vars = self.generate_dim_vars(len(ip.shape))
         self.cpp("{0}({2}) = {3}({1}({2}));".format(
-            op_fn, ip_fn, ','.join(dim_vars), expr))
-        self.funcs[node.output[0]].set_shape(ip_shape)
+            op.name, ip.name, ','.join(dim_vars), expr))
+        self.funcs[node.output[0]].set_shape(ip.shape)
+        self.funcs[node.output[0]].set_type(ip.type)
 
     def generate_bin_expr(self, node, expr):
-        ip0_fn = self.funcs[node.input[0]]
-        ip1_fn = self.funcs[node.input[1]]
-        op_fn  = self.funcs[node.output[0]]
-        ip0_dim = ip0_fn.shape
-        ip1_dim = ip1_fn.shape
+        ip0 = self.funcs[node.input[0]]
+        ip1 = self.funcs[node.input[1]]
+        op  = self.funcs[node.output[0]]
+        assert(ip0.type == ip1.type)
+        ip0_dim = ip0.shape
+        ip1_dim = ip1.shape
         dims = max(len(ip0_dim), len(ip1_dim))
         dim_vars = self.generate_dim_vars(dims)
         ip0_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
@@ -339,22 +339,21 @@ class HalideBackendRep(BackendRep):
         ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
                         zip(ip1_dim, dim_vars[-len(ip1_dim):])]
         self.cpp("{}({}) = {}({}) {} {}({});".format(
-            op_fn.name, ",".join(dim_vars[::-1]),
-            ip0_fn.name, ",".join(ip0_dim_vars[::-1]),
+            op.name, ",".join(dim_vars[::-1]),
+            ip0.name, ",".join(ip0_dim_vars[::-1]),
             expr,
-            ip1_fn.name, ",".join(ip1_dim_vars[::-1])))
+            ip1.name, ",".join(ip1_dim_vars[::-1])))
 
-        self.funcs[node.output[0]].set_shape(
+        op.set_shape(
             [ip1_dim[-i] if i > len(ip0_dim) else
              (ip0_dim[-i] if i > len(ip1_dim) else
               max(ip0_dim[-i], ip1_dim[-i])) for i in range(1, dims+1)][::-1])
+        op.set_type(ip0.type)
 
 
-
-    def generate_red_expr(self, node, expr):
-        ip_fn    = self.funcs[node.input[0]].name
-        ip_shape = self.funcs[node.input[0]].shape
-        op_fn    = self.funcs[node.output[0]].name
+    def generate_red_expr(self, node, expr, type=None):
+        ip    = self.funcs[node.input[0]]
+        op    = self.funcs[node.output[0]]
 
         keepdims = True
         axis = 0
@@ -364,24 +363,37 @@ class HalideBackendRep(BackendRep):
             if attr.name == "axis":
                 axis = attr.i
 
-        self.cpp("RDom r(0, {});".format(ip_shape[axis]))
-        dims = len(ip_shape)
+        self.cpp("RDom r(0, {});".format(ip.shape[axis]))
+        dims = len(ip.shape)
         dim_vars = self.generate_dim_vars(dims)
         op_dim_vars = [dvar for i, dvar in enumerate(dim_vars)] if keepdims else \
                          [dvar for i, dvar in enumerate(dim_vars) if i != axis]
         ip_dim_vars = [(dvar if i != axis else "r") for i, dvar in enumerate(dim_vars)]
-        self.cpp("{}({}) = {}({}({}))[0];".format(
-            op_fn, ','.join(op_dim_vars[::-1]),
-            expr,
-            ip_fn, ','.join(ip_dim_vars[::-1])
-            ))
-        op_shape = ip_shape
+        op_shape = ip.shape
         if keepdims:
             op_shape[axis] = 1
         else:
             op_shape.pop(axis)
-        self.funcs[node.output[0]].set_shape(op_shape)
+        op_type = type if type else ip.type
+        self.cpp("{}({}) = cast<{}>({}({}({}))[0]);".format(
+            op.name, ','.join(op_dim_vars[::-1]),
+            op_type,
+            expr,
+            ip.name, ','.join(ip_dim_vars[::-1])
+            ))
 
+        op.set_shape(op_shape)
+        op.set_type(op_type)
+    # def generate_cast(self, node):
+    #     ip = self.funcs[node.input[0]]
+    #     op = self.funcs[node.output[0]]
+    #     op_type = 
+    #     for attr in node.attribute:
+            
+    #     ip_type = ip.type
+    #     op_type =
+
+    # op.set_shape(ip.shape)
     def generate_bn(self, node):
         x    = self.funcs[node.input[0]]
         s    = self.funcs[node.input[1]]
@@ -396,28 +408,26 @@ class HalideBackendRep(BackendRep):
                 eps   = attr.f
                 eps_t = C_TYPE_DECODER(attr.type)
         #s * (x - mean) / np.sqrt(var + epsilon) + bias
-
         dim_vars = self.generate_dim_vars(4)
         self.cpp("Expr eps({});".format(eps))
-
-        self.cpp("{}({}) = {}({})*({}({}) - {}({})) / sqrt({}({})+eps) + {}({});".format(
+        self.cpp("{}({}) = cast<{}>({}({})*({}({}) - {}({})) / sqrt({}({})+eps) + {}({}));".format(
             op.name, ','.join(dim_vars[::-1]),
+            x.type,
             s.name, dim_vars[-3],
             x.name, ','.join(dim_vars[::-1]),
             mean.name, dim_vars[-3],
             var.name, dim_vars[-3],
             bias.name, dim_vars[-3]))
         op.set_shape(x.shape)
-            
+        op.set_type(x.type)
 
 
     def generate_pool(self, node):
-        ip_fn    = self.funcs[node.input[0]].name
-        op_fn    = self.funcs[node.output[0]].name
-        ip_shape = self.funcs[node.input[0]].shape
+        ip    = self.funcs[node.input[0]]
+        op    = self.funcs[node.output[0]]
         if node.op_type == "Conv":
-            w_fn    = self.funcs[node.input[1]].name
-            w_shape = self.funcs[node.input[1]].shape
+            w = self.funcs[node.input[1]]
+
         pool_shape        = None
         count_include_pad = False
         pads              = None
@@ -451,7 +461,7 @@ class HalideBackendRep(BackendRep):
         filter_area = np.prod(pool_shape)
 
 
-        dim_vars = self.generate_dim_vars(len(ip_shape))
+        dim_vars = self.generate_dim_vars(len(ip.shape))
         self.cpp("RDom r({{{}}}, \"r\");".format(
             ','.join(["{{0,{}}}".format(i) for i in pool_shape])))
         red_vars = ["r[{}]".format(i) for i in range(len(pool_shape))]
@@ -465,11 +475,11 @@ class HalideBackendRep(BackendRep):
 
         if padded:
             self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}}});".format(
-                ip_fn,
+                ip.name,
                 ','.join(["{{0,{}}}".format(s) if i < len(red_vars) else "{Expr(),Expr()}" \
-                          for i, s in enumerate(ip_shape[::-1])])))
+                          for i, s in enumerate(ip.shape[::-1])])))
         else:
-            self.cpp("Func padded = {};".format(ip_fn))
+            self.cpp("Func padded = {};".format(ip.name))
         self.cpp()
         if node.op_type == "AveragePool":
             self.cpp("Func counts;")
@@ -480,34 +490,35 @@ class HalideBackendRep(BackendRep):
                 self.cpp("Func ones;")
                 self.cpp("ones({}) = 1;".format(','.join(dim_vars[::-1][:len(red_vars)])))
                 self.cpp("Func padded_ones = BoundaryConditions::constant_exterior(ones, 0, {{{}}});".format(
-                    ','.join(["{{0,{}}}".format(s) for s in ip_shape[::-1][:len(red_vars)]])))
+                    ','.join(["{{0,{}}}".format(s) for s in ip.shape[::-1][:len(red_vars)]])))
                 self.cpp("counts({}) = sum(padded_ones({}));".format(
                     ','.join(dim_vars[::-1][:len(red_vars)]),
                     ','.join(ip_vars[::-1][:len(red_vars)])
                 ))
             self.cpp("{}({}) = sum(padded({})) / counts({});".format(
-                op_fn, ','.join(dim_vars[::-1]),
+                op.name, ','.join(dim_vars[::-1]),
                 ','.join(ip_vars[::-1]),
                 ','.join(dim_vars[::-1][:len(red_vars)])))
         elif node.op_type == "Conv":
-            n_kern_ign_dims = len(w_shape) - len(red_vars)
-            kern_vars = [rv if rv else dv for (dv, rv) in zip(dim_vars[-len(w_shape):],
+            n_kern_ign_dims = len(w.shape) - len(red_vars)
+            kern_vars = [rv if rv else dv for (dv, rv) in zip(dim_vars[-len(w.shape):],
                                                               [None] * n_kern_ign_dims + red_vars)]
 
             self.cpp("{}({}) = sum(padded({}) * {}({}));".format(
-                op_fn, ','.join(dim_vars[::-1]),
+                op.name, ','.join(dim_vars[::-1]),
                 ','.join(ip_vars[::-1]),
-                w_fn, ','.join(kern_vars[::-1])
+                w.name, ','.join(kern_vars[::-1])
                 ))
 
 
         op_shape = [floor((ips + pad[0] + pad[1] - ks) / stride + 1) if pad else ips \
                     for (ips, pad, ks, stride) \
-                    in zip(ip_shape,
+                    in zip(ip.shape,
                            [None] * n_ign_dims + pads,
                            [None] * n_ign_dims + pool_shape,
                            [None] * n_ign_dims + strides)]
-        self.funcs[node.output[0]].set_shape(op_shape)
+        op.set_shape(op_shape)
+        op.set_type(ip.type)
         return
 
     def generate_node(self, nidx, node):
@@ -532,9 +543,9 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "Div":
             self.generate_bin_expr(node, "/")
         elif node.op_type == "ArgMax":
-            self.generate_red_expr(node, "argmax")
+            self.generate_red_expr(node, "argmax", "int64_t")
         elif node.op_type == "ArgMin":
-            self.generate_red_expr(node, "argmin")
+            self.generate_red_expr(node, "argmin", "int64_t")
         elif node.op_type == "BatchNormalization":
             self.generate_bn(node)
         elif node.op_type == "AveragePool":
@@ -550,7 +561,9 @@ class HalideBackendRep(BackendRep):
 
         for op in node.output:
             try:
-                self.cpp("// {} shape: {}".format(op, self.funcs[op].shape))
+                self.cpp("// {}  {}{}".format(op, self.funcs[op].type,
+                                              self.funcs[op].shape))
+                self.funcs[op].type
             except:
                 print(node)
                 print(self.halide_str)
