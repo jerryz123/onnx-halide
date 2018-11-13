@@ -193,27 +193,40 @@ class HalideBackendRep(BackendRep):
                     c_type,
                     func_name, buf_name))
             self.cpp()
+        print(model)
+        # Create arrays for constant nodes
+        self.cpp()
+        for cnode in model.graph.node:
+            if cnode.op_type == "Constant":
+                tensor_name = cnode.output[0]
+                attr = cnode.attribute[0]
+                onnx_name = tensor_name.replace('/', '')
 
-        # # Create arrays for constant nodes
-        # self.cpp()
-        # for cnode in model.graph.node:
-        #     if cnode.op_type == "Constant":
-        #         for (op_name, attr) in zip(cnode.output, cnode.attribute):
-        #             c_name  = op_name.replace('/', '')
-        #             c_type  = C_TYPE_DECODER(attr.t.data_type)
-        #             c_shape = [d for d in attr.t.dims]
-        #             c_size  = np.prod(c_shape)
-        #             if not c_shape: # Scalar const
-        #                 if attr.t.float_data:
-        #                     self.cpp("{} c_{} = {};".format(c_type, c_name, attr.t.float_data[0]))
-        #                 else:
-        #                     raise NotImplementedError
-        #             else:
-        #                 if attr.t.float_data:
-        #                     c_arr = ", ".join([str(i) for i in attr.t.float_data])
-        #                 else:
-        #                     raise NotImplementedError
-        #                 self.cpp("{} c_{}[{}] = {{{}}};".format(c_type, c_name, c_size, c_arr))
+                c_shape = attr.t.dims
+                c_type  = C_TYPE_DECODER(attr.t.data_type)
+                c_name  = "{}_constant_c".format(onnx_name)
+                c_size  = np.prod(c_shape)
+
+                if attr.t.float_data:
+                    init_data = ','.join(map(str, attr.t.float_data))
+                
+                self.cpp("{} {}[{}] = {{{}}};".format(c_type,
+                                                      c_name,
+                                                      c_size,
+                                                      init_data))
+                self.arrays[tensor_name] = HalideObj(c_name, c_shape, c_type)
+
+                buf_name = "{}_constant_buf".format(onnx_name)
+                self.cpp("Buffer<{0}> {3}({1}, {{{2}}});".format(
+                    c_type,
+                    c_name,
+                    ', '.join([str(i) for i in c_shape][::-1]),
+                    buf_name))
+                self.buffers[tensor_name] = HalideObj(buf_name, c_shape, c_type)
+
+                func_name = "{}_func".format(onnx_name, io)
+                func_strs.append("Func {}({});".format(func_name, buf_name))
+                self.funcs[tensor_name] = HalideObj(func_name, c_shape, c_type)
 
 
         # Generate the Halide compute function
@@ -555,6 +568,8 @@ class HalideBackendRep(BackendRep):
         return
 
     def generate_node(self, nidx, node):
+        if node.op_type == "Constant":
+            return
         for op in node.output:
             f_name = op.replace('/', '') + "_func"
             self.generate_func(f_name)
