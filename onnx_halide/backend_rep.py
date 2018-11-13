@@ -4,20 +4,24 @@ import subprocess
 import ctypes
 import _ctypes
 import numpy as np
+import importlib
 import os
 
 HALIDE_DIR = "/home/jerry/Projects/Halide"
 
 ONNX_TYPE_DECODER = lambda x:{k: v for (v, k) in TensorProto.DataType.items()}[x]
 C_TYPE_DECODER = lambda x: {"FLOAT" : "float",
-                            "BOOL"  : "int8_t"}\
+                            "BOOL"  : "int8_t",
+                            "INT64" : "int64_t"}\
                  [ONNX_TYPE_DECODER(x)]
 
-NP_TYPE_DECODER = lambda x: {"float" : np.float32,
-                             "bool"  : np.bool}[x]
+NP_TYPE_DECODER = lambda x: {"float"   : np.float32,
+                             "int8_t"  : np.bool,
+                             "int64_t" : np.int64}[x]
 
-CTYPE_TYPE_DECODER = lambda x: {"float" : ctypes.c_float,
-                                "int8_t"  : ctypes.c_char}[x]
+CTYPE_TYPE_DECODER = lambda x: {"float"   : ctypes.c_float,
+                                "int8_t"  : ctypes.c_char,
+                                "int64_t" : ctypes.c_longlong}[x]
 
 
 class HalideObj:
@@ -43,6 +47,11 @@ class HalideObj:
                                      self._shape,
                                      self._type_str)
 
+def is_loaded(lib):
+    libp = os.path.abspath(lib)
+    ret = os.system("lsof -w -p %d | grep %s > /dev/null" % (os.getpid(), libp))
+    return ret == 0
+    
 class HalideBackendRep(BackendRep):
     def __init__(self, model):
 
@@ -53,6 +62,7 @@ class HalideBackendRep(BackendRep):
         self.model_name = "{}_{}_{}".format(model.graph.name, model.model_version,
                                        model.domain.replace('.', '-'))
         self.generate_csrc(model)
+
 
     def cpp(self, s="", incr=0):
         if incr < 0:
@@ -78,6 +88,8 @@ class HalideBackendRep(BackendRep):
 
         return ops
 
+
+    
     def generate_csrc(self, model):
         self.cpp("#include \"Halide.h\"")
         self.cpp("#include <stdint.h>")
@@ -129,7 +141,8 @@ class HalideBackendRep(BackendRep):
                 func_strs.append("Func {}({});".format(func_name, buf_name))
                 self.funcs[tensor.name] = HalideObj(func_name, c_shape, c_type)
             else:
-                output_strs.append("{}.realize({});".format(
+                output_strs.append("cast<{}>({}).realize({});".format(
+                    c_type,
                     func_name, buf_name))
             self.cpp()
 
@@ -170,9 +183,22 @@ class HalideBackendRep(BackendRep):
         self.cpp()
 
         # Realize the output funcs into output buffesr
-        for out_str in output_strs:
-            self.cpp(out_str)
-        self.cpp()
+        for tensor, _ in outputs:
+            func_name = self.funcs[tensor.name].name
+            buf_name = self.buffers[tensor.name].name
+            buf_shape = self.buffers[tensor.name].shape
+            buf_type = self.buffers[tensor.name].type
+            self.generate_func("{}_casted".format(func_name))
+            self.cpp("{", 1)
+            dim_vars = self.generate_dim_vars(len(buf_shape))
+            self.cpp("{}_casted({}) = cast<{}>({}({}));".format(
+                func_name, ",".join(dim_vars),
+                buf_type,
+                func_name, ",".join(dim_vars)))
+            self.cpp("};", -1)
+            self.cpp("{}_casted.realize({});".format(func_name, buf_name))
+        # for out_str in output_strs:
+        #     self.cpp(out_str)        self.cpp()
         self.cpp("};", -1)
 
 
@@ -185,9 +211,8 @@ class HalideBackendRep(BackendRep):
 
         cmd  = "g++ -g -fPIC -xc++ -ldl -lpthread -lz -lterminfo "
         cmd += "-c halonet.cc -o halonet.o "
-        cmd += "{} ".format(llvm_flags)
+        cmd += "{} -Wno-pedantic ".format(llvm_flags)
         cmd += "-lHalide -I{0}/include -L{0}/lib ".format(HALIDE_DIR)
-
         r = subprocess.run(cmd,
                            shell=True,
                            stdout=subprocess.PIPE,
@@ -208,8 +233,7 @@ class HalideBackendRep(BackendRep):
         print(r.stderr.decode())
 
 
-        self.halolib = ctypes.CDLL("./lib{}.so".format(self.model_name),
-                                   mode=ctypes.RTLD_GLOBAL)
+        self.halolib = ctypes.CDLL("./lib{}.so".format(self.model_name))
 
         self.in_pointers = []
         for ip in model.graph.input:
@@ -276,32 +300,67 @@ class HalideBackendRep(BackendRep):
 * in_bounded(n_v,r[0],x_v*{}+r[1],y_v*{}+r[2]);".format(
     op, weight, stride_x, stride_y))
 
+    def generate_dim_vars(self, n_vars):
+        dim_vars = ["d_{}".format(i) for i in range(n_vars)]
+        for dim_var in dim_vars:
+            self.generate_var(dim_var)
+        return dim_vars
+        
     def generate_unary_expr(self, node, expr):
-        print(self.funcs)
         ip_fn = self.funcs[node.input[0]].name
         op_fn = self.funcs[node.output[0]].name
         dims  = self.funcs[node.input[0]].shape
-        dim_vars = ["d_{}".format(i) for i in range(len(dims))]
-        for dim_var in dim_vars:
-            self.generate_var(dim_var)
+        dim_vars = self.generate_dim_vars(len(dims))
         self.cpp("{0}({2}) = {3}({1}({2}));".format(
             op_fn, ip_fn, ','.join(dim_vars), expr))
 
     def generate_bin_expr(self, node, expr):
-        ip0 = node.input[0]
-        ip1 = node.input[1]
-        op = node.output[0]
-        ip0_dim = self.buffers[ip0].shape
-        ip1_dim = self.buffers[ip1].shape
-        out_dim = self.buffers[op].shape
-        dim_vars = ["d_{}".format(i) for i in range(len(out_dim))]
-        for dim_var in dim_vars:
-            self.generate_var(dim_var)
+        ip0_fn = self.funcs[node.input[0]]
+        ip1_fn = self.funcs[node.input[1]]
+        op_fn  = self.funcs[node.output[0]]
+        ip0_dim = ip0_fn.shape
+        ip1_dim = ip1_fn.shape
+        dims = max(len(ip0_dim), len(ip1_dim))
+        dim_vars = self.generate_dim_vars(dims)
+        ip0_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
+                        zip(ip0_dim, dim_vars[-len(ip0_dim):])]
+        ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
+                        zip(ip1_dim, dim_vars[-len(ip1_dim):])]
         self.cpp("{}({}) = {}({}) {} {}({});".format(
-            op, ",".join(dim_vars),
-            ip0, ",".join(dim_vars[:len(ip0_dim)]),
+            op_fn.name, ",".join(dim_vars[::-1]),
+            ip0_fn.name, ",".join(ip0_dim_vars[::-1]),
             expr,
-            ip1, ",".join(dim_vars[:len(ip1_dim)])))
+            ip1_fn.name, ",".join(ip1_dim_vars[::-1])))
+
+        op_fn._shape = (None,) * dims
+
+    def generate_red_expr(self, node, expr):
+        ip_fn    = self.funcs[node.input[0]].name
+        ip_shape = self.funcs[node.input[0]].shape
+        op_fn    = self.funcs[node.output[0]].name
+
+        keepdims = True
+        axis = 0
+        for attr in node.attribute:
+            if attr.name == "keepdims":
+                keepdims = attr.i == 1
+            if attr.name == "axis":
+                axis = attr.i
+
+        self.cpp("RDom r(0, {});".format(ip_shape[axis]))
+        dims = len(ip_shape)
+        dim_vars = self.generate_dim_vars(dims)
+        op_dim_vars = [dvar for i, dvar in enumerate(dim_vars)] if keepdims else \
+                                     [dvar for i, dvar in enumerate(dim_vars) if i != axis]
+        ip_dim_vars = [(dvar if i != axis else "r") for i, dvar in enumerate(dim_vars)]
+        self.cpp("{}({}) = {}({}({}))[0];".format(
+            op_fn, ','.join(op_dim_vars[::-1]),
+
+            expr,
+            ip_fn, ','.join(ip_dim_vars[::-1])
+            ))
+
+        return
 
     def generate_node(self, nidx, node):
         for op in node.output:
@@ -316,12 +375,20 @@ class HalideBackendRep(BackendRep):
             self.generate_unary_expr(node, "abs")
         elif node.op_type == "Acos":
             self.generate_unary_expr(node, "acos")
+        elif node.op_type == "Asin":
+            self.generate_unary_expr(node, "asin")
+        elif node.op_type == "Atan":
+            self.generate_unary_expr(node, "atan")
         elif node.op_type == "Add":
             self.generate_bin_expr(node, "+")
         elif node.op_type == "And":
             self.generate_bin_expr(node, "&")
         elif node.op_type == "Div":
             a = 1
+        elif node.op_type == "ArgMax":
+            self.generate_red_expr(node, "argmax")
+        elif node.op_type == "ArgMin":
+            self.generate_red_expr(node, "argmin")
 
         else:
             print("unhandled node ", node.op_type)
