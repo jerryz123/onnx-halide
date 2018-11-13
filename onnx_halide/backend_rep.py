@@ -95,7 +95,6 @@ class HalideBackendRep(BackendRep):
 
     def generate_csrc(self, model):
 
-        print(model)
 
         self.cpp("#include \"Halide.h\"")
         self.cpp("#include <stdint.h>")
@@ -195,9 +194,6 @@ class HalideBackendRep(BackendRep):
             buf_name   = self.buffers[tensor.name].name
             buf_shape  = self.buffers[tensor.name].shape
             buf_type   = self.buffers[tensor.name].type
-            if not (func_shape == buf_shape):
-                print("{} != {}".format(func_shape, buf_shape))
-                exit(1)
             self.generate_func("{}_casted".format(func_name))
             self.cpp("{", 1)
             dim_vars = self.generate_dim_vars(len(buf_shape))
@@ -207,6 +203,10 @@ class HalideBackendRep(BackendRep):
                 func_name, ",".join(dim_vars)))
             self.cpp("};", -1)
             self.cpp("{}_casted.realize({});".format(func_name, buf_name))
+            if not (func_shape == buf_shape):
+                print("{} != {}".format(func_shape, buf_shape))
+                print(self.halide_str)
+                exit(1)
 
         # for out_str in output_strs:
         #     self.cpp(out_str)        self.cpp()
@@ -382,6 +382,34 @@ class HalideBackendRep(BackendRep):
             op_shape.pop(axis)
         self.funcs[node.output[0]].set_shape(op_shape)
 
+    def generate_bn(self, node):
+        x    = self.funcs[node.input[0]]
+        s    = self.funcs[node.input[1]]
+        bias = self.funcs[node.input[2]]
+        mean = self.funcs[node.input[3]]
+        var  = self.funcs[node.input[4]]
+        op   = self.funcs[node.output[0]]
+        eps  = 0
+        eps_t = "float"
+        for attr in node.attribute:
+            if attr.name == "epsilon":
+                eps   = attr.f
+                eps_t = C_TYPE_DECODER(attr.type)
+        #s * (x - mean) / np.sqrt(var + epsilon) + bias
+
+        dim_vars = self.generate_dim_vars(4)
+        self.cpp("Expr eps({});".format(eps))
+
+        self.cpp("{}({}) = {}({})*({}({}) - {}({})) / sqrt({}({})+eps) + {}({});".format(
+            op.name, ','.join(dim_vars[::-1]),
+            s.name, dim_vars[-3],
+            x.name, ','.join(dim_vars[::-1]),
+            mean.name, dim_vars[-3],
+            var.name, dim_vars[-3],
+            bias.name, dim_vars[-3]))
+        op.set_shape(x.shape)
+            
+
 
     def generate_pool(self, node):
         ip_fn    = self.funcs[node.input[0]].name
@@ -465,9 +493,7 @@ class HalideBackendRep(BackendRep):
             n_kern_ign_dims = len(w_shape) - len(red_vars)
             kern_vars = [rv if rv else dv for (dv, rv) in zip(dim_vars[-len(w_shape):],
                                                               [None] * n_kern_ign_dims + red_vars)]
-            print(w_shape)
-            print(list(zip(dim_vars[-len(w_shape):], [None] * n_kern_ign_dims + red_vars)))
-            print(kern_vars)
+
             self.cpp("{}({}) = sum(padded({}) * {}({}));".format(
                 op_fn, ','.join(dim_vars[::-1]),
                 ','.join(ip_vars[::-1]),
@@ -509,6 +535,8 @@ class HalideBackendRep(BackendRep):
             self.generate_red_expr(node, "argmax")
         elif node.op_type == "ArgMin":
             self.generate_red_expr(node, "argmin")
+        elif node.op_type == "BatchNormalization":
+            self.generate_bn(node)
         elif node.op_type == "AveragePool":
             self.generate_pool(node)
         elif node.op_type == "Conv":
@@ -521,6 +549,10 @@ class HalideBackendRep(BackendRep):
         self.cpp("}", -1)
 
         for op in node.output:
-            assert(self.funcs[op].shape)
-            self.cpp("// {} shape: {}".format(op, self.funcs[op].shape))
+            try:
+                self.cpp("// {} shape: {}".format(op, self.funcs[op].shape))
+            except:
+                print(node)
+                print(self.halide_str)
+
         #self.cpp("{}.realize();".format(node.output[0]))
