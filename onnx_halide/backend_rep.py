@@ -6,6 +6,7 @@ import _ctypes
 import numpy as np
 import importlib
 import os
+from math import floor, ceil
 
 HALIDE_DIR = "/home/jerry/Projects/Halide"
 
@@ -51,7 +52,7 @@ def is_loaded(lib):
     libp = os.path.abspath(lib)
     ret = os.system("lsof -w -p %d | grep %s > /dev/null" % (os.getpid(), libp))
     return ret == 0
-    
+
 class HalideBackendRep(BackendRep):
     def __init__(self, model):
 
@@ -89,8 +90,11 @@ class HalideBackendRep(BackendRep):
         return ops
 
 
-    
+
     def generate_csrc(self, model):
+
+        print(model)
+
         self.cpp("#include \"Halide.h\"")
         self.cpp("#include <stdint.h>")
         self.cpp("using namespace Halide;")
@@ -305,7 +309,7 @@ class HalideBackendRep(BackendRep):
         for dim_var in dim_vars:
             self.generate_var(dim_var)
         return dim_vars
-        
+
     def generate_unary_expr(self, node, expr):
         ip_fn = self.funcs[node.input[0]].name
         op_fn = self.funcs[node.output[0]].name
@@ -351,15 +355,90 @@ class HalideBackendRep(BackendRep):
         dims = len(ip_shape)
         dim_vars = self.generate_dim_vars(dims)
         op_dim_vars = [dvar for i, dvar in enumerate(dim_vars)] if keepdims else \
-                                     [dvar for i, dvar in enumerate(dim_vars) if i != axis]
+                         [dvar for i, dvar in enumerate(dim_vars) if i != axis]
         ip_dim_vars = [(dvar if i != axis else "r") for i, dvar in enumerate(dim_vars)]
         self.cpp("{}({}) = {}({}({}))[0];".format(
             op_fn, ','.join(op_dim_vars[::-1]),
-
             expr,
             ip_fn, ','.join(ip_dim_vars[::-1])
             ))
 
+    def generate_pool(self, node, expr):
+        ip_fn    = self.funcs[node.input[0]].name
+        op_fn    = self.funcs[node.output[0]].name
+        ip_shape = self.funcs[node.input[0]].shape
+        kernel_shape      = None
+        count_include_pad = False
+        pads              = None
+        padded            = False
+        auto_pad          = None
+        strides           = None
+        for attr in node.attribute:
+            if attr.name == "kernel_shape":
+                kernel_shape = attr.ints
+            if attr.name == "count_include_pad":
+                count_include_pad = attr.i == 1
+            if attr.name == "pads":
+                pads = [(a, b) for a, b in zip(attr.ints[::2], attr.ints[1::2])]
+                padded = sum(attr.ints) > 0
+            if attr.name == "auto_pad":
+                auto_pad = attr.s.decode()
+            if attr.name == "strides":
+                strides = list(attr.ints)
+        if not pads:
+            if auto_pad == "SAME_UPPER":
+                pads = [(floor((ks-1)/2), ceil((ks-1)/2)) for ks in kernel_shape]
+                padded = True
+            elif auto_pad == "SAME_LOWER":
+                pads = [(ceil((ks-1)/2), floor((ks-1)/2)) for ks in kernel_shape]
+                padded = True
+            else:
+                pads = [(0, 0) for ks in kernel_shape]
+                count_include_pad = True
+        if not strides:
+            strides = [1 for ks in kernel_shape]
+        filter_area = np.prod(kernel_shape)
+
+
+        dim_vars = self.generate_dim_vars(len(ip_shape))
+        self.cpp("RDom r({{{}}}, \"r\");".format(
+            ','.join(["{{0,{}}}".format(i) for i in kernel_shape])))
+        red_vars = ["r[{}]".format(i) for i in range(len(kernel_shape))]
+
+        ip_vars = ["{}*{} + {} - {}".format(dv, st, rv, pad[0]) if rv else dv \
+                   for (dv, rv, st, pad) in zip(dim_vars,
+                                            [None] * (len(dim_vars)-len(red_vars)) + red_vars,
+                                            [None] * (len(dim_vars)-len(red_vars)) + strides,
+                                            [None] * (len(dim_vars)-len(red_vars)) + pads)]
+        self.cpp()
+        if count_include_pad:
+            self.cpp("Func counts;")
+            self.cpp("counts({}) = {};".format(','.join(dim_vars[::-1][:len(red_vars)]),
+                                               filter_area))
+        else:
+            self.cpp("Func ones;")
+            self.cpp("ones({}) = 1;".format(','.join(dim_vars[::-1][:len(red_vars)])))
+            self.cpp("Func padded_ones = BoundaryConditions::constant_exterior(ones, 0, {{{}}});".format(
+                ','.join(["{{0,{}}}".format(s) for s in ip_shape[::-1][:len(red_vars)]])))
+
+            self.cpp("Func counts;")
+            self.cpp("counts({}) = sum(padded_ones({}));".format(
+                ','.join(dim_vars[::-1][:len(red_vars)]),
+                ','.join(ip_vars[::-1][:len(red_vars)])
+            ))
+
+        self.cpp()
+        if padded:
+            self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}}});".format(
+                ip_fn,
+                ','.join(["{{0,{}}}".format(s) if i < len(red_vars) else "{Expr(),Expr()}" \
+                          for i, s in enumerate(ip_shape[::-1])])))
+        else:
+            self.cpp("Func padded = {};".format(ip_fn))
+        self.cpp("{}({}) = sum({}({})) / counts({});".format(
+            op_fn, ','.join(dim_vars[::-1]),
+            "padded", ','.join(ip_vars[::-1]),
+            ','.join(dim_vars[::-1][:len(red_vars)])))
         return
 
     def generate_node(self, nidx, node):
@@ -384,14 +463,18 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "And":
             self.generate_bin_expr(node, "&")
         elif node.op_type == "Div":
-            a = 1
+            self.generate_bin_expr(node, "/")
         elif node.op_type == "ArgMax":
             self.generate_red_expr(node, "argmax")
         elif node.op_type == "ArgMin":
             self.generate_red_expr(node, "argmin")
+        elif node.op_type == "AveragePool":
+            self.generate_pool(node, "average")
 
         else:
+            print()
             print("unhandled node ", node.op_type)
+            print(node)
             raise NotImplementedError
         self.cpp("}", -1)
         #self.cpp("{}.realize();".format(node.output[0]))
