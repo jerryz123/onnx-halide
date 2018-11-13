@@ -30,6 +30,18 @@ CTYPE_TYPE_DECODER = lambda x: {"float16_t": ctypes.c_short,
                                 "int8_t"   : ctypes.c_char,
                                 "int64_t"  : ctypes.c_longlong}[x]
 
+MIN_TYPE_DECODER = lambda x: {"float16_t": "float16_t.make_infinity(0)",
+                              "float"    : "cast<float>(Expr(-FLT_MAX))",
+                              "double"   : "cast<double>(Expr(-DBL_MAX))",
+                              "int8_t"   : "cast<int8_t>(Expr(-CHAR_MAX))",
+                              "int64_t"  : "cast<int64_t>(Expr(-LLONG_MAX))"}[x]
+MAX_TYPE_DECODER = lambda x: {"float16_t": "float16_t.make_infinity(1)",
+                              "float"    : "cast<float>(Expr(FLT_MAX))",
+                              "double"   : "cast<double>(Expr(DBL_MAX))",
+                              "int8_t"   : "cast<int8_t>(Expr(CHAR_MAX))",
+                              "int64_t"  : "cast<int64_t>(Expr(LLONG_MAX))"}[x]
+
+
 
 class HalideObj:
     def __init__(self, name=None, shape=None, type_str=None):
@@ -107,6 +119,8 @@ class HalideBackendRep(BackendRep):
 
         self.cpp("#include \"Halide.h\"")
         self.cpp("#include <stdint.h>")
+        self.cpp("#include <cfloat>")
+        self.cpp("#include <limits.h>")
         self.cpp("using namespace Halide;")
         self.cpp()
 
@@ -274,19 +288,26 @@ class HalideBackendRep(BackendRep):
         return dim_vars
 
     def generate_unary_expr(self, node, expr):
-        ip    = self.funcs[node.input[0]]
-        op    = self.funcs[node.output[0]]
+        ip      = self.funcs[node.input[0]]
+        op      = self.funcs[node.output[0]]
         op_type = ip.type
+        min_v   = MIN_TYPE_DECODER(op_type)
+        max_v   = MAX_TYPE_DECODER(op_type)
         for attr in node.attribute:
-            if attr.name == "to" and node.op_type == "Cast":
+            if attr.name == "to":
                 op_type = C_TYPE_DECODER(attr.i)
-
+            if attr.name == "max":
+                max_v = "Expr({})".format(attr.f)
+            if attr.name == "min":
+                min_v = "Expr({})".format(attr.f)
         dim_vars = self.generate_dim_vars(len(ip.shape))
 
         ip_expr = "{}({})".format(ip.name, ','.join(dim_vars[::-1]))
 
         if node.op_type == "Cast":
             expr = expr.format(ip_expr, op_type)
+        elif node.op_type == "Clip":
+            expr = expr.format(ip_expr, min_v, max_v)
         else:
             expr = expr.format(ip_expr)
 
@@ -504,9 +525,8 @@ class HalideBackendRep(BackendRep):
             self.generate_unary_expr(node, "atan({})")
         elif node.op_type == "Ceil":
             self.generate_unary_expr(node, "ceil({})")
-        # elif node.op_type == "Clip":
-        #     print(node)
-        #     self.generate_unary_expr(node, "clamp({})")
+        elif node.op_type == "Clip":
+            self.generate_unary_expr(node, "clamp({}, {}, {})")
         elif node.op_type == "Cast":
             self.generate_unary_expr(node, "cast<{1}>({0})")
         elif node.op_type == "Add":
