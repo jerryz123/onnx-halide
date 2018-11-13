@@ -384,16 +384,22 @@ class HalideBackendRep(BackendRep):
 
         op.set_shape(op_shape)
         op.set_type(op_type)
-    # def generate_cast(self, node):
-    #     ip = self.funcs[node.input[0]]
-    #     op = self.funcs[node.output[0]]
-    #     op_type = 
-    #     for attr in node.attribute:
-            
-    #     ip_type = ip.type
-    #     op_type =
+    def generate_cast(self, node):
+        ip = self.funcs[node.input[0]]
+        op = self.funcs[node.output[0]]
+        op_type = None
 
-    # op.set_shape(ip.shape)
+        for attr in node.attribute:
+            if attr.name == "to":
+                op_type = C_TYPE_DECODER(attr.i)
+        dim_vars = self.generate_dim_vars(len(ip.shape))
+        self.cpp("{}({}) = cast<{}>({}({}));".format(
+            op.name, ','.join(dim_vars[::-1]),
+            op_type,
+            ip.name, ','.join(dim_vars[::-1])))
+        op.set_shape(ip.shape)
+        op.set_type(op_type)
+
     def generate_bn(self, node):
         x    = self.funcs[node.input[0]]
         s    = self.funcs[node.input[1]]
@@ -552,6 +558,8 @@ class HalideBackendRep(BackendRep):
             self.generate_pool(node)
         elif node.op_type == "Conv":
             self.generate_pool(node)
+        elif node.op_type == "Cast":
+            self.generate_cast(node)
         else:
             print()
             print("unhandled node ", node.op_type)
