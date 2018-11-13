@@ -41,7 +41,27 @@ MAX_TYPE_DECODER = lambda x: {"float16_t": "float16_t.make_infinity(1)",
                               "int8_t"   : "cast<int8_t>(Expr(CHAR_MAX))",
                               "int64_t"  : "cast<int64_t>(Expr(LLONG_MAX))"}[x]
 
-
+class OnnxAttr:
+    def __init__(self, attr, v_fn=lambda x:x, value=None, type=None):
+        self.value = value
+        self.type = type
+        if hasattr(attr, "i"):
+            self.value = attr.i
+        elif hasattr(attr, "f"):
+            self.value = attr.f
+        if hasattr(attr, "type"):
+            self.type = attr.type
+        self.value = v_fn(self.value)
+class OnnxAttrs:
+    def __init__(self, attrs, **kwargs):
+        for k, v in kwargs.items():
+            if v:
+                setattr(self, k, OnnxAttr(None, v[0], v[1]))
+            else:
+                setattr(self, k, None)
+        for attr in attrs:
+            if hasattr(self, attr.name):
+                setattr(self, attr.name, OnnxAttr(attr))
 
 class HalideObj:
     def __init__(self, name=None, shape=None, type_str=None):
@@ -293,6 +313,8 @@ class HalideBackendRep(BackendRep):
         op_type = ip.type
         min_v   = MIN_TYPE_DECODER(op_type)
         max_v   = MAX_TYPE_DECODER(op_type)
+
+
         for attr in node.attribute:
             if attr.name == "to":
                 op_type = C_TYPE_DECODER(attr.i)
@@ -408,6 +430,30 @@ class HalideBackendRep(BackendRep):
         op.set_shape(x.shape)
         op.set_type(x.type)
 
+    def generate_concat(self, node):
+        ip0 = self.funcs[node.input[0]]
+        ip1 = self.funcs[node.input[1]]
+        op  = self.funcs[node.output[0]]
+        axis = 0
+        for attr in node.attribute:
+            if attr.name == "axis":
+                axis = attr.i
+        n_dims = len(ip0.shape)
+        op_shape = [ip0s + ip1s if i == axis else ip0s for i, (ip0s, ip1s) in enumerate(zip(ip0.shape, ip1.shape))]
+        dim_vars = self.generate_dim_vars(n_dims)
+
+        ip0_dim_vars = ["clamp({}, 0, {})".format(v, ip0.shape[axis] - 1) \
+                        if i == axis else v for i, v in enumerate(dim_vars)]
+        ip1_dim_vars = ["clamp({} - {}, 0, {})".format(v, ip0.shape[axis], ip1.shape[axis] - 1) \
+                        if i == axis else v for i, v in enumerate(dim_vars)]
+        self.cpp("{}({}) = select({} < {}, {}({}), {}({}));".format(
+            op.name, ','.join(dim_vars[::-1]),
+            dim_vars[axis], ip0.shape[axis],
+            ip0.name, ','.join(ip0_dim_vars[::-1]),
+            ip1.name, ','.join(ip1_dim_vars[::-1])))
+
+        op.set_shape(op_shape)
+        op.set_type(ip0.type)
 
     def generate_pool(self, node):
         ip    = self.funcs[node.input[0]]
@@ -545,7 +591,8 @@ class HalideBackendRep(BackendRep):
             self.generate_pool(node)
         elif node.op_type == "Conv":
             self.generate_pool(node)
-
+        elif node.op_type == "Concat":
+            self.generate_concat(node)
         else:
             print()
             print("unhandled node ", node.op_type)
