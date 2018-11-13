@@ -383,11 +383,14 @@ class HalideBackendRep(BackendRep):
         self.funcs[node.output[0]].set_shape(op_shape)
 
 
-    def generate_pool(self, node, expr):
+    def generate_pool(self, node):
         ip_fn    = self.funcs[node.input[0]].name
         op_fn    = self.funcs[node.output[0]].name
         ip_shape = self.funcs[node.input[0]].shape
-        kernel_shape      = None
+        if node.op_type == "Conv":
+            w_fn    = self.funcs[node.input[1]].name
+            w_shape = self.funcs[node.input[1]].shape
+        pool_shape        = None
         count_include_pad = False
         pads              = None
         padded            = False
@@ -395,7 +398,7 @@ class HalideBackendRep(BackendRep):
         strides           = None
         for attr in node.attribute:
             if attr.name == "kernel_shape":
-                kernel_shape = list(attr.ints)
+                pool_shape = list(attr.ints)
             if attr.name == "count_include_pad":
                 count_include_pad = attr.i == 1
             if attr.name == "pads":
@@ -407,48 +410,31 @@ class HalideBackendRep(BackendRep):
                 strides = list(attr.ints)
         if not pads:
             if auto_pad == "SAME_UPPER":
-                pads = [(floor((ks-1)/2), ceil((ks-1)/2)) for ks in kernel_shape]
+                pads = [(floor((ks-1)/2), ceil((ks-1)/2)) for ks in pool_shape]
                 padded = True
             elif auto_pad == "SAME_LOWER":
-                pads = [(ceil((ks-1)/2), floor((ks-1)/2)) for ks in kernel_shape]
+                pads = [(ceil((ks-1)/2), floor((ks-1)/2)) for ks in pool_shape]
                 padded = True
             else:
-                pads = [(0, 0) for ks in kernel_shape]
+                pads = [(0, 0) for ks in pool_shape]
                 count_include_pad = True
         if not strides:
-            strides = [1 for ks in kernel_shape]
-        filter_area = np.prod(kernel_shape)
+            strides = [1 for ks in pool_shape]
+        filter_area = np.prod(pool_shape)
 
 
         dim_vars = self.generate_dim_vars(len(ip_shape))
         self.cpp("RDom r({{{}}}, \"r\");".format(
-            ','.join(["{{0,{}}}".format(i) for i in kernel_shape])))
-        red_vars = ["r[{}]".format(i) for i in range(len(kernel_shape))]
+            ','.join(["{{0,{}}}".format(i) for i in pool_shape])))
+        red_vars = ["r[{}]".format(i) for i in range(len(pool_shape))]
 
         n_ign_dims = len(dim_vars) - len(red_vars)
-        ip_vars = ["{}*{} + {} - {}".format(dv, st, rv, pad[0]) if rv else dv \
+        ip_vars = ["{}*{}+{}-{}".format(dv, st, rv, pad[0]) if rv else dv \
                    for (dv, rv, st, pad) in zip(dim_vars,
                                             [None] * n_ign_dims + red_vars,
                                             [None] * n_ign_dims + strides,
                                             [None] * n_ign_dims + pads)]
-        self.cpp()
-        if count_include_pad:
-            self.cpp("Func counts;")
-            self.cpp("counts({}) = {};".format(','.join(dim_vars[::-1][:len(red_vars)]),
-                                               filter_area))
-        else:
-            self.cpp("Func ones;")
-            self.cpp("ones({}) = 1;".format(','.join(dim_vars[::-1][:len(red_vars)])))
-            self.cpp("Func padded_ones = BoundaryConditions::constant_exterior(ones, 0, {{{}}});".format(
-                ','.join(["{{0,{}}}".format(s) for s in ip_shape[::-1][:len(red_vars)]])))
 
-            self.cpp("Func counts;")
-            self.cpp("counts({}) = sum(padded_ones({}));".format(
-                ','.join(dim_vars[::-1][:len(red_vars)]),
-                ','.join(ip_vars[::-1][:len(red_vars)])
-            ))
-
-        self.cpp()
         if padded:
             self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}}});".format(
                 ip_fn,
@@ -456,18 +442,44 @@ class HalideBackendRep(BackendRep):
                           for i, s in enumerate(ip_shape[::-1])])))
         else:
             self.cpp("Func padded = {};".format(ip_fn))
-        self.cpp("{}({}) = sum({}({})) / counts({});".format(
-            op_fn, ','.join(dim_vars[::-1]),
-            "padded", ','.join(ip_vars[::-1]),
-            ','.join(dim_vars[::-1][:len(red_vars)])))
+        self.cpp()
+        if node.op_type == "AveragePool":
+            self.cpp("Func counts;")
+            if count_include_pad:
+                self.cpp("counts({}) = {};".format(','.join(dim_vars[::-1][:len(red_vars)]),
+                                                   filter_area))
+            else:
+                self.cpp("Func ones;")
+                self.cpp("ones({}) = 1;".format(','.join(dim_vars[::-1][:len(red_vars)])))
+                self.cpp("Func padded_ones = BoundaryConditions::constant_exterior(ones, 0, {{{}}});".format(
+                    ','.join(["{{0,{}}}".format(s) for s in ip_shape[::-1][:len(red_vars)]])))
+                self.cpp("counts({}) = sum(padded_ones({}));".format(
+                    ','.join(dim_vars[::-1][:len(red_vars)]),
+                    ','.join(ip_vars[::-1][:len(red_vars)])
+                ))
+            self.cpp("{}({}) = sum(padded({})) / counts({});".format(
+                op_fn, ','.join(dim_vars[::-1]),
+                ','.join(ip_vars[::-1]),
+                ','.join(dim_vars[::-1][:len(red_vars)])))
+        elif node.op_type == "Conv":
+            n_kern_ign_dims = len(w_shape) - len(red_vars)
+            kern_vars = [rv if rv else dv for (dv, rv) in zip(dim_vars[-len(w_shape):],
+                                                              [None] * n_kern_ign_dims + red_vars)]
+            print(w_shape)
+            print(list(zip(dim_vars[-len(w_shape):], [None] * n_kern_ign_dims + red_vars)))
+            print(kern_vars)
+            self.cpp("{}({}) = sum(padded({}) * {}({}));".format(
+                op_fn, ','.join(dim_vars[::-1]),
+                ','.join(ip_vars[::-1]),
+                w_fn, ','.join(kern_vars[::-1])
+                ))
 
-        # output_spatial_shape[i] = floor((input_spatial_shape[i] + pad_shape[i] - kernel_spatial_shape[i]) / strides_spatial_shape[i] + 1)
 
         op_shape = [floor((ips + pad[0] + pad[1] - ks) / stride + 1) if pad else ips \
                     for (ips, pad, ks, stride) \
                     in zip(ip_shape,
                            [None] * n_ign_dims + pads,
-                           [None] * n_ign_dims + kernel_shape,
+                           [None] * n_ign_dims + pool_shape,
                            [None] * n_ign_dims + strides)]
         self.funcs[node.output[0]].set_shape(op_shape)
         return
@@ -479,9 +491,7 @@ class HalideBackendRep(BackendRep):
             assert(op not in self.funcs)
             self.funcs[op] = HalideObj(f_name,)
         self.cpp("{{ // {} {} {}".format(node.op_type, nidx, node.name), 1)
-        if node.op_type == "Conv":
-            self.generate_conv(node)
-        elif node.op_type == "Abs":
+        if   node.op_type == "Abs":
             self.generate_unary_expr(node, "abs")
         elif node.op_type == "Acos":
             self.generate_unary_expr(node, "acos")
@@ -500,7 +510,9 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "ArgMin":
             self.generate_red_expr(node, "argmin")
         elif node.op_type == "AveragePool":
-            self.generate_pool(node, "average")
+            self.generate_pool(node)
+        elif node.op_type == "Conv":
+            self.generate_pool(node)
         else:
             print()
             print("unhandled node ", node.op_type)
@@ -510,4 +522,5 @@ class HalideBackendRep(BackendRep):
 
         for op in node.output:
             assert(self.funcs[op].shape)
+            self.cpp("// {} shape: {}".format(op, self.funcs[op].shape))
         #self.cpp("{}.realize();".format(node.output[0]))
