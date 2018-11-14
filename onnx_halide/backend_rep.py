@@ -193,7 +193,7 @@ class HalideBackendRep(BackendRep):
                     c_type,
                     func_name, buf_name))
             self.cpp()
-        print(model)
+
         # Create arrays for constant nodes
         self.cpp()
         for cnode in model.graph.node:
@@ -243,7 +243,7 @@ class HalideBackendRep(BackendRep):
             self.generate_node(nidx, node)
         self.cpp()
 
-        # Realize the output funcs into output buffesr
+        # Realize the output funcs into output buffers
         for tensor, _ in outputs:
             func = self.funcs[tensor.name]
             buf  = self.buffers[tensor.name]
@@ -468,6 +468,42 @@ class HalideBackendRep(BackendRep):
         op.set_shape(op_shape)
         op.set_type(ip0.type)
 
+    def generate_pad(self, node):
+        ip = self.funcs[node.input[0]]
+        op = self.funcs[node.output[0]]
+        const = "Expr(0)"
+        pads = None
+        mode = "constant"
+        for attr in node.attribute:
+            if attr.name == "mode":
+                mode = attr.s
+            if attr.name == "pads":
+                pads = [(a, b) for a, b in zip(attr.ints[:len(attr.ints)//2],
+                                               attr.ints[len(attr.ints)//2:])]
+            if attr.name == "value":
+                const = "cast<{}>(Expr({}))".format(C_TYPE_DECODER(attr.type),
+                                              attr.f)
+        dim_vars = self.generate_dim_vars(len(ip.shape))
+        n_ign_dims = len(ip.shape) - len(pads)
+        op_shape = [ips + pad[0] + pad[1] if pad else ips for pad, ips in zip(
+            [None] * n_ign_dims + pads,
+            ip.shape)]
+        self.cpp("Func padded = BoundaryConditions::constant_exterior({}, {}, {{{}}});".format(
+            ip.name,
+            const, ','.join(["{{0, {}}}".format(ips) for ips in ip.shape[::-1]])))
+
+        ip_vars = ["{}-{}".format(dv, pad[0]) if pad else dv \
+                   for dv, pad in zip(dim_vars,
+                                      [None] * n_ign_dims + pads)]
+        self.cpp("{}({}) = padded({});".format(
+            op.name,
+            ','.join(dim_vars[::-1]),
+            ','.join(ip_vars[::-1])))
+
+        op.set_shape(op_shape)
+        op.set_type(ip.type)
+
+
     def generate_pool(self, node):
         ip    = self.funcs[node.input[0]]
         op    = self.funcs[node.output[0]]
@@ -608,6 +644,8 @@ class HalideBackendRep(BackendRep):
             self.generate_pool(node)
         elif node.op_type == "Concat":
             self.generate_concat(node)
+        elif node.op_type == "Pad":
+            self.generate_pad(node)
         else:
             print()
             print("unhandled node ", node.op_type)
