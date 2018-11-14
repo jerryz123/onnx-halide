@@ -251,6 +251,7 @@ class HalideBackendRep(BackendRep):
             if not (func.shape == buf.shape and func.type == buf.type):
                 print("{}{} != {}{}".format(func.type, func.shape, buf.type, buf.shape))
                 print(self.halide_str)
+                print(model)
                 exit(1)
 
         # for out_str in output_strs:
@@ -522,7 +523,8 @@ class HalideBackendRep(BackendRep):
             if attr.name == "count_include_pad":
                 count_include_pad = attr.i == 1
             if attr.name == "pads":
-                pads = [(a, b) for a, b in zip(attr.ints[::2], attr.ints[1::2])]
+                li = len(attr.ints)//2
+                pads = [(a, b) for a, b in zip(attr.ints[:li], attr.ints[li:])]
                 padded = sum(attr.ints) > 0
             if attr.name == "auto_pad":
                 auto_pad = attr.s.decode()
@@ -592,6 +594,7 @@ class HalideBackendRep(BackendRep):
                 w.name, ','.join(kern_vars[::-1])
                 ))
 
+        #output_shape[i] = stride[i] * (input_size[i] - 1) + output_padding[i] + kernel_shape[i] - pads[start_i] - pads[end_i]
 
         op_shape = [floor((ips + pad[0] + pad[1] - ks) / stride + 1) if pad else ips \
                     for (ips, pad, ks, stride) \
