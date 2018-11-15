@@ -1,5 +1,5 @@
 from onnx.backend.base import BackendRep
-from onnx import TensorProto
+from onnx import TensorProto, shape_inference
 import subprocess
 import ctypes
 import _ctypes
@@ -103,8 +103,9 @@ class HalideBackendRep(BackendRep):
         self.indent = 0
         self.buffers = {}
         self.name_map = {}
-        self.model_name = "{}_{}_{}".format(model.graph.name, model.model_version,
-                                       model.domain.replace('.', '-'))
+        self.model_name = "{}_{}_{}".format(model.graph.name,
+                                            model.model_version,
+                                            model.domain.replace('.', '-'))
         self.generate_csrc(model)
 
 
@@ -125,7 +126,8 @@ class HalideBackendRep(BackendRep):
         ops = []
         for op_name, op_ptr in self.out_pointers:
             op = np.zeros(shape=self.buffers[op_name].shape,
-                          dtype=NP_TYPE_DECODER(self.buffers[op_name].type))
+                          dtype=NP_TYPE_DECODER(
+                              self.buffers[op_name].type))
             ctypes.memmove(op.ctypes.data, op_ptr, op.nbytes)
             ops.append(op)
             print(op)
@@ -165,7 +167,8 @@ class HalideBackendRep(BackendRep):
             onnx_name = tensor.name.replace('/', '')
             io = "in" if is_ip else "out"
 
-            c_shape = [d.dim_value for d in tensor.type.tensor_type.shape.dim]
+            c_shape = [d.dim_value for d \
+                       in tensor.type.tensor_type.shape.dim]
             c_type  = C_TYPE_DECODER(tensor.type.tensor_type.elem_type)
             c_name  = "{}_{}_c".format(onnx_name, io)
             c_size  = np.prod(c_shape)
@@ -182,12 +185,17 @@ class HalideBackendRep(BackendRep):
                 c_name,
                 ', '.join([str(i) for i in c_shape][::-1]),
                 buf_name))
-            self.buffers[tensor.name] = HalideObj(buf_name, c_shape, c_type)
+            self.buffers[tensor.name] = HalideObj(buf_name,
+                                                  c_shape,
+                                                  c_type)
 
             func_name = "{}_func".format(onnx_name, io)
             if is_ip:
-                func_strs.append("Func {}({});".format(func_name, buf_name))
-                self.funcs[tensor.name] = HalideObj(func_name, c_shape, c_type)
+                func_strs.append("Func {}({});".format(func_name,
+                                                       buf_name))
+                self.funcs[tensor.name] = HalideObj(func_name,
+                                                    c_shape,
+                                                    c_type)
             else:
                 output_strs.append("cast<{}>({}).realize({});".format(
                     c_type,
@@ -214,7 +222,9 @@ class HalideBackendRep(BackendRep):
                                                       c_name,
                                                       c_size,
                                                       init_data))
-                self.arrays[tensor_name] = HalideObj(c_name, c_shape, c_type)
+                self.arrays[tensor_name] = HalideObj(c_name,
+                                                     c_shape,
+                                                     c_type)
 
                 buf_name = "{}_constant_buf".format(onnx_name)
                 self.cpp("Buffer<{0}> {3}({1}, {{{2}}});".format(
@@ -222,11 +232,14 @@ class HalideBackendRep(BackendRep):
                     c_name,
                     ', '.join([str(i) for i in c_shape][::-1]),
                     buf_name))
-                self.buffers[tensor_name] = HalideObj(buf_name, c_shape, c_type)
+                self.buffers[tensor_name] = HalideObj(buf_name,
+                                                      c_shape, c_type)
 
                 func_name = "{}_func".format(onnx_name, io)
-                func_strs.append("Func {}({});".format(func_name, buf_name))
-                self.funcs[tensor_name] = HalideObj(func_name, c_shape, c_type)
+                func_strs.append("Func {}({});".format(func_name,
+                                                       buf_name))
+                self.funcs[tensor_name] = HalideObj(func_name,
+                                                    c_shape, c_type)
 
 
         # Generate the Halide compute function
@@ -249,7 +262,8 @@ class HalideBackendRep(BackendRep):
             buf  = self.buffers[tensor.name]
             self.cpp("{}.realize({});".format(func_name, buf.name))
             if not (func.shape == buf.shape and func.type == buf.type):
-                print("{}{} != {}{}".format(func.type, func.shape, buf.type, buf.shape))
+                print("{}{} != {}{}".format(func.type, func.shape,
+                                            buf.type, buf.shape))
                 print(self.halide_str)
                 print(model)
                 exit(1)
@@ -261,7 +275,8 @@ class HalideBackendRep(BackendRep):
 
         with open("halonet.cc", 'w') as f:
             f.write(self.halide_str)
-        r = subprocess.run(["llvm-config", "--cxxflags", "--ldflags", "--libs"],
+        r = subprocess.run(["llvm-config", "--cxxflags",
+                            "--ldflags", "--libs"],
                            stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE)
         llvm_flags = r.stdout.decode().replace('\n', ' ')
@@ -295,15 +310,17 @@ class HalideBackendRep(BackendRep):
         self.in_pointers = []
         for ip in model.graph.input:
             ctype_type = CTYPE_TYPE_DECODER(self.arrays[ip.name].type)
-            ip_ptr = ctypes.pointer(ctype_type.in_dll(self.halolib,
-                                                      self.arrays[ip.name].name))
+            ip_ptr = ctypes.pointer(ctype_type.in_dll(
+                self.halolib,
+                self.arrays[ip.name].name))
             self.in_pointers.append(ip_ptr)
 
         self.out_pointers = []
         for op in model.graph.output:
             ctype_type = CTYPE_TYPE_DECODER(self.arrays[op.name].type)
-            op_ptr = ctypes.pointer(ctype_type.in_dll(self.halolib,
-                                                      self.arrays[op.name].name))
+            op_ptr = ctypes.pointer(ctype_type.in_dll(
+                self.halolib,
+                self.arrays[op.name].name))
             self.out_pointers.append((op.name, op_ptr))
 
         self.halide_fn = self.halolib.halide_compute
@@ -379,7 +396,8 @@ class HalideBackendRep(BackendRep):
         op.set_shape(
             [ip1_dim[-i] if i > len(ip0_dim) else
              (ip0_dim[-i] if i > len(ip1_dim) else
-              max(ip0_dim[-i], ip1_dim[-i])) for i in range(1, dims+1)][::-1])
+              max(ip0_dim[-i], ip1_dim[-i])) \
+             for i in range(1, dims+1)][::-1])
         op.set_type(ip0.type)
 
 
@@ -398,9 +416,12 @@ class HalideBackendRep(BackendRep):
         self.cpp("RDom r(0, {});".format(ip.shape[axis]))
         dims = len(ip.shape)
         dim_vars = self.generate_dim_vars(dims)
-        op_dim_vars = [dvar for i, dvar in enumerate(dim_vars)] if keepdims else \
-                         [dvar for i, dvar in enumerate(dim_vars) if i != axis]
-        ip_dim_vars = [(dvar if i != axis else "r") for i, dvar in enumerate(dim_vars)]
+        op_dim_vars = [dvar for i, dvar in enumerate(dim_vars)] \
+                      if keepdims else \
+                         [dvar for i, dvar in enumerate(dim_vars) \
+                          if i != axis]
+        ip_dim_vars = [(dvar if i != axis else "r") \
+                       for i, dvar in enumerate(dim_vars)]
         op_shape = ip.shape
         if keepdims:
             op_shape[axis] = 1
@@ -456,10 +477,16 @@ class HalideBackendRep(BackendRep):
         op_shape = [ip0s + ip1s if i == axis else ip0s for i, (ip0s, ip1s) in enumerate(zip(ip0.shape, ip1.shape))]
         dim_vars = self.generate_dim_vars(n_dims)
 
-        ip0_dim_vars = ["clamp({}, 0, {})".format(v, ip0.shape[axis] - 1) \
-                        if i == axis else v for i, v in enumerate(dim_vars)]
-        ip1_dim_vars = ["clamp({} - {}, 0, {})".format(v, ip0.shape[axis], ip1.shape[axis] - 1) \
-                        if i == axis else v for i, v in enumerate(dim_vars)]
+        ip0_dim_vars = ["clamp({}, 0, {})".format(v,
+                                                  ip0.shape[axis] - 1) \
+                        if i == axis else v for i, v \
+                        in enumerate(dim_vars)]
+        ip1_dim_vars = ["clamp({} - {}, 0, {})".format(
+            v,
+            ip0.shape[axis],
+            ip1.shape[axis] - 1) \
+                        if i == axis else v for i, v \
+                        in enumerate(dim_vars)]
         self.cpp("{}({}) = select({} < {}, {}({}), {}({}));".format(
             op.name, ','.join(dim_vars[::-1]),
             dim_vars[axis], ip0.shape[axis],
@@ -479,19 +506,23 @@ class HalideBackendRep(BackendRep):
             if attr.name == "mode":
                 mode = attr.s
             if attr.name == "pads":
-                pads = [(a, b) for a, b in zip(attr.ints[:len(attr.ints)//2],
-                                               attr.ints[len(attr.ints)//2:])]
+                pads = [(a, b) for a, b in zip(
+                    attr.ints[:len(attr.ints)//2],
+                    attr.ints[len(attr.ints)//2:])]
             if attr.name == "value":
-                const = "cast<{}>(Expr({}))".format(C_TYPE_DECODER(attr.type),
-                                              attr.f)
+                const = "cast<{}>(Expr({}))".format(
+                    C_TYPE_DECODER(attr.type),
+                    attr.f)
         dim_vars = self.generate_dim_vars(len(ip.shape))
         n_ign_dims = len(ip.shape) - len(pads)
-        op_shape = [ips + pad[0] + pad[1] if pad else ips for pad, ips in zip(
-            [None] * n_ign_dims + pads,
-            ip.shape)]
+        op_shape = [ips + pad[0] + pad[1] if pad else ips \
+                    for pad, ips in zip(
+                            [None] * n_ign_dims + pads,
+                            ip.shape)]
         self.cpp("Func padded = BoundaryConditions::constant_exterior({}, {}, {{{}}});".format(
             ip.name,
-            const, ','.join(["{{0, {}}}".format(ips) for ips in ip.shape[::-1]])))
+            const, ','.join(["{{0, {}}}".format(ips) \
+                             for ips in ip.shape[::-1]])))
 
         ip_vars = ["{}-{}".format(dv, pad[0]) if pad else dv \
                    for dv, pad in zip(dim_vars,
@@ -504,12 +535,165 @@ class HalideBackendRep(BackendRep):
         op.set_shape(op_shape)
         op.set_type(ip.type)
 
+    def generate_conv(self, node):
+        ip    = self.funcs[node.input[0]]
+        w     = self.funcs[node.input[1]]
+        op    = self.funcs[node.output[0]]
+        kernel_shape = None
+        pads         = None
+        padded       = False
+        strides      = None
+        for attr in node.attribute:
+            if attr.name == "kernel_shape":
+                kernel_shape = list(attr.ints)
+            if attr.name == "pads":
+                li = len(attr.ints) // 2
+                pads = [(a, b) for (a, b) in zip(attr.ints[:li],
+                                                 attr.ints[li:])]
+                padded = True
+            if attr.name == "strides":
+                strides = list(attr.ints)
+        if not kernel_shape:
+            kernel_shape = w.shape[2:]
+        if not pads:
+            pads = [(0, 0) for k in kernel_shape]
+        if not strides:
+            strides = [1 for i in w.shape[2:]]
+
+
+        dim_vars = self.generate_dim_vars(len(ip.shape))
+        self.cpp("RDom r({{{}}}, \"r\");".format(
+            ','.join(["{{0,{}}}".format(i) \
+                      for i in [ip.shape[1]] + kernel_shape])))
+        red_vars= ["r[{}]".format(i) for i in range(len(kernel_shape) + 1)]
+
+        ip_vars = [dim_vars[0]] + [red_vars[0]] + \
+                  ["{}*{}+{}-{}".format(dv, stride, rv, pad[0]) for \
+                   dv, rv, pad, stride in \
+                   zip(dim_vars[2:],
+                       red_vars[1:],
+                       pads,
+                       strides)]
+        w_vars = [dim_vars[1]] + red_vars
+        self.cpp()
+        if padded:
+            self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}, {{Expr(), Expr()}}, {{Expr(), Expr()}}, }});".format(
+                ip.name,
+                ','.join(["{{0,{}}}".format(s) \
+                          for i, s in enumerate(ip.shape[2:][::-1])])))
+        else:
+            self.cpp("Func padded = {};".format(ip.name))
+        self.cpp("{}({}) = sum(padded({}) * {}({}));".format(
+            op.name, ','.join(dim_vars[::-1]),
+            ','.join(ip_vars[::-1]),
+            w.name, ','.join(w_vars[::-1])))
+        op_shape = [ip.shape[0], w.shape[0]] \
+                   + [floor((ips+pad[0]+pad[1]-ks)/stride+1) \
+                                   for (ips, pad, ks, stride) \
+                                   in zip(ip.shape[2:],
+                                          pads,
+                                          w.shape[2:],
+                                          strides)]
+        op.set_shape(op_shape)
+        op.set_type(ip.type)
+
+    def generate_convT(self, node):
+        ip    = self.funcs[node.input[0]]
+        w     = self.funcs[node.input[1]]
+        op    = self.funcs[node.output[0]]
+        kernel_shape = None
+        pads         = None
+        strides      = None
+        op_shape     = None
+        op_pads      = None
+        auto_pad     = None
+        for attr in node.attribute:
+            if attr.name == "kernel_shape":
+                kernel_shape = list(attr.ints)
+            if attr.name == "pads":
+                li = len(attr.ints) // 2
+                pads = [(a, b) for (a, b) in zip(attr.ints[:li],
+                                                 attr.ints[li:])]
+            if attr.name == "strides":
+                strides = list(attr.ints)
+            if attr.name == "output_shape":
+                op_shape = list(attr.ints)
+            if attr.name == "output_padding":
+                op_pads = list(attr.ints)
+        if not strides:
+            strides = [1 for i in w.shape[2:]]
+        if not kernel_shape:
+            kernel_shape = w.shape[2:]
+        if not pads:
+            pads = [(0, 0) for w in kernel_shape]
+        if not op_pads:
+            op_pads = [0 for j in kernel_shape]
+        if not op_shape and op_pads:
+            op_shape = [stride*(ips-1)+op_pad+ks-pad[0]-pad[1] \
+                        for (ips, op_pad, ks, stride, pad) in
+                        zip(ip.shape[2:],
+                            op_pads,
+                            kernel_shape,
+                            strides,
+                            pads)]
+        if op_shape:
+            op_shape = op_shape[-len(kernel_shape):]
+            total_padding = [stride*(ops-1)+op_pad+ks-ips \
+                             for (ips, ops, op_pad, ks, stride) in \
+                             zip(ip.shape[2:],
+                                 op_shape,
+                                 op_pads,
+                                 kernel_shape,
+                                 strides)]
+            if auto_pad:
+                if auto_pad != "SAME_UPPER":
+                    pads = [(tp//2, tp-tp//2) for tp in total_padding]
+                else:
+                    pads = [(tp-tp//2, tp//2) for tp in total_padding]
+        if not op_shape:
+            op_shape = [ip.shape[0], w.shape[1]] \
+                   + [stride*(ips-1)+op_pad+ks-pad[0]-pad[1]#floor((ips+pad[0]+pad[1]-ks)/stride+1) \
+                      for (ips, pad, ks, stride, op_pad) \
+                      in zip(ip.shape[2:],
+                             pads,
+                             w.shape[2:],
+                             strides,
+                             op_pads
+                      )]
+        op_shape = [ip.shape[0], w.shape[1]] + op_shape
+        dim_vars = self.generate_dim_vars(len(ip.shape))
+        self.cpp("RDom r({{{}}}, \"r\");".format(
+            ','.join(["{{0,{}}}".format(i) \
+                      for i in ip.shape[1:]])))
+        red_vars= ["r[{}]".format(i) for i in range(len(kernel_shape) + 1)]
+
+        ip_vars = [dim_vars[0]] + red_vars
+        w_vars = [dim_vars[0]] + [red_vars[0]] + \
+                 ["-{}*{}+{}+{}".format(rv, stride, dv, pad[0]) for \
+                  dv, rv, pad, stride in \
+                  zip(dim_vars[2:],
+                      red_vars[1:],
+                      pads,
+                      strides)]
+        self.cpp()
+        self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}, {{Expr(), Expr()}}, {{Expr(), Expr()}}, }});".format(
+            w.name,
+            ','.join(["{{0,{}}}".format(s) \
+                      for i, s in enumerate(w.shape[2:][::-1])])))
+
+        self.cpp()
+        self.cpp("{}({}) = sum({}({}) * padded({}));".format(
+            op.name, ','.join(dim_vars[::-1]),
+            ip.name, ','.join(ip_vars[::-1]),
+            ','.join(w_vars[::-1])))
+
+        op.set_shape(op_shape)
+        op.set_type(ip.type)
+        
 
     def generate_pool(self, node):
         ip    = self.funcs[node.input[0]]
         op    = self.funcs[node.output[0]]
-        if node.op_type == "Conv":
-            w = self.funcs[node.input[1]]
 
         pool_shape        = None
         count_include_pad = False
@@ -524,18 +708,23 @@ class HalideBackendRep(BackendRep):
                 count_include_pad = attr.i == 1
             if attr.name == "pads":
                 li = len(attr.ints)//2
-                pads = [(a, b) for a, b in zip(attr.ints[:li], attr.ints[li:])]
+                pads = [(a, b) for a, b in zip(attr.ints[:li],
+                                               attr.ints[li:])]
                 padded = sum(attr.ints) > 0
             if attr.name == "auto_pad":
                 auto_pad = attr.s.decode()
             if attr.name == "strides":
                 strides = list(attr.ints)
+        if not pool_shape:
+            pool_shape = w.shape[2:]
         if not pads:
             if auto_pad == "SAME_UPPER":
-                pads = [(floor((ks-1)/2), ceil((ks-1)/2)) for ks in pool_shape]
+                pads = [(floor((ks-1)/2), ceil((ks-1)/2)) \
+                        for ks in pool_shape]
                 padded = True
             elif auto_pad == "SAME_LOWER":
-                pads = [(ceil((ks-1)/2), floor((ks-1)/2)) for ks in pool_shape]
+                pads = [(ceil((ks-1)/2), floor((ks-1)/2)) \
+                        for ks in pool_shape]
                 padded = True
             else:
                 pads = [(0, 0) for ks in pool_shape]
@@ -543,65 +732,58 @@ class HalideBackendRep(BackendRep):
         if not strides:
             strides = [1 for ks in pool_shape]
         filter_area = np.prod(pool_shape)
-
-
         dim_vars = self.generate_dim_vars(len(ip.shape))
         self.cpp("RDom r({{{}}}, \"r\");".format(
             ','.join(["{{0,{}}}".format(i) for i in pool_shape])))
         red_vars = ["r[{}]".format(i) for i in range(len(pool_shape))]
 
         n_ign_dims = len(dim_vars) - len(red_vars)
-        ip_vars = ["{}*{}+{}-{}".format(dv, st, rv, pad[0]) if rv else dv \
-                   for (dv, rv, st, pad) in zip(dim_vars,
-                                            [None] * n_ign_dims + red_vars,
-                                            [None] * n_ign_dims + strides,
-                                            [None] * n_ign_dims + pads)]
+        ip_vars = ["{}*{}+{}-{}".format(dv, st, rv, pad[0]) \
+                   if rv else dv \
+                   for (dv, rv, st, pad) in zip(
+                           dim_vars,
+                           [None] * n_ign_dims + red_vars,
+                           [None] * n_ign_dims + strides,
+                           [None] * n_ign_dims + pads)]
 
         if padded:
             self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}}});".format(
                 ip.name,
-                ','.join(["{{0,{}}}".format(s) if i < len(red_vars) else "{Expr(),Expr()}" \
+                ','.join(["{{0,{}}}".format(s) \
+                          if i < len(red_vars) else "{Expr(),Expr()}" \
                           for i, s in enumerate(ip.shape[::-1])])))
         else:
             self.cpp("Func padded = {};".format(ip.name))
         self.cpp()
-        if node.op_type == "AveragePool":
-            self.cpp("Func counts;")
-            if count_include_pad:
-                self.cpp("counts({}) = {};".format(','.join(dim_vars[::-1][:len(red_vars)]),
-                                                   filter_area))
-            else:
-                self.cpp("Func ones;")
-                self.cpp("ones({}) = 1;".format(','.join(dim_vars[::-1][:len(red_vars)])))
-                self.cpp("Func padded_ones = BoundaryConditions::constant_exterior(ones, 0, {{{}}});".format(
-                    ','.join(["{{0,{}}}".format(s) for s in ip.shape[::-1][:len(red_vars)]])))
-                self.cpp("counts({}) = sum(padded_ones({}));".format(
-                    ','.join(dim_vars[::-1][:len(red_vars)]),
-                    ','.join(ip_vars[::-1][:len(red_vars)])
-                ))
-            self.cpp("{}({}) = sum(padded({})) / counts({});".format(
-                op.name, ','.join(dim_vars[::-1]),
-                ','.join(ip_vars[::-1]),
+        self.cpp("Func counts;")
+        if count_include_pad:
+            self.cpp("counts({}) = {};".format(
+                ','.join(dim_vars[::-1][:len(red_vars)]),
+                filter_area))
+        else:
+            self.cpp("Func ones;")
+            self.cpp("ones({}) = 1;".format(
                 ','.join(dim_vars[::-1][:len(red_vars)])))
-        elif node.op_type == "Conv":
-            n_kern_ign_dims = len(w.shape) - len(red_vars)
-            kern_vars = [rv if rv else dv for (dv, rv) in zip(dim_vars[-len(w.shape):],
-                                                              [None] * n_kern_ign_dims + red_vars)]
+            self.cpp("Func padded_ones = BoundaryConditions::constant_exterior(ones, 0, {{{}}});".format(
+                ','.join(["{{0,{}}}".format(s) \
+                          for s in ip.shape[::-1][:len(red_vars)]])))
+            self.cpp("counts({}) = sum(padded_ones({}));".format(
+                ','.join(dim_vars[::-1][:len(red_vars)]),
+                ','.join(ip_vars[::-1][:len(red_vars)])
+            ))
+        self.cpp("{}({}) = sum(padded({})) / counts({});".format(
+            op.name, ','.join(dim_vars[::-1]),
+            ','.join(ip_vars[::-1]),
+            ','.join(dim_vars[::-1][:len(red_vars)])))
 
-            self.cpp("{}({}) = sum(padded({}) * {}({}));".format(
-                op.name, ','.join(dim_vars[::-1]),
-                ','.join(ip_vars[::-1]),
-                w.name, ','.join(kern_vars[::-1])
-                ))
-
-        #output_shape[i] = stride[i] * (input_size[i] - 1) + output_padding[i] + kernel_shape[i] - pads[start_i] - pads[end_i]
-
-        op_shape = [floor((ips + pad[0] + pad[1] - ks) / stride + 1) if pad else ips \
+        op_shape = [floor((ips+pad[0]+pad[1]-ks)/stride+1) \
+                    if pad else ips \
                     for (ips, pad, ks, stride) \
                     in zip(ip.shape,
                            [None] * n_ign_dims + pads,
                            [None] * n_ign_dims + pool_shape,
                            [None] * n_ign_dims + strides)]
+
         op.set_shape(op_shape)
         op.set_type(ip.type)
         return
@@ -644,7 +826,9 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "AveragePool":
             self.generate_pool(node)
         elif node.op_type == "Conv":
-            self.generate_pool(node)
+            self.generate_conv(node)
+        elif node.op_type == "ConvTranspose":
+            self.generate_convT(node)
         elif node.op_type == "Concat":
             self.generate_concat(node)
         elif node.op_type == "Pad":
