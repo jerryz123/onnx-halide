@@ -565,6 +565,64 @@ class HalideBackendRep(BackendRep):
                                + ["clamp(cast<int>({}({})), 0, {})".format(ids.name, dim_vars[axis], ip.shape[axis]-1)] \
                                + dim_vars[axis+1:])[::-1])))
 
+    def generate_gemm(self, node):
+        A   = self.funcs[node.input[0]]
+        B   = self.funcs[node.input[1]]
+        C   = self.funcs[node.input[2]]
+        Y   = self.funcs[node.output[0]]
+        alpha, beta, transA, transB = 1, 1, 0, 0
+        for attr in node.attribute:
+            if attr.name == "alpha":
+                alpha = attr.f
+            if attr.name == "beta":
+                beta = attr.f
+            if attr.name == "transA":
+                transA = attr.i
+            if attr.name == "transB":
+                transB = attr.i
+        if transA:
+            K, M = A.shape
+        else:
+            M, K = A.shape
+        if transB:
+            N, K = B.shape
+        else:
+            K, N = B.shape
+        alpha = "cast<{}>(Expr({}))".format(C.type, alpha)
+        beta = "cast<{}>(Expr({}))".format(C.type, beta)
+        self.cpp("RDom r(0, {});".format(K))
+        Y.set_shape([M, N])
+        Y.set_type(C.type)
+        dim_vars = self.generate_dim_vars(len(C.shape))
+        self.generate_func("norm_A")
+        self.generate_func("norm_B")
+        self.generate_func("norm_C")
+        if transA:
+            self.cpp("norm_A({}) = {}({});".format(
+                ','.join(dim_vars[:2][::-1]),
+                A.name, ','.join(dim_vars[:2])))
+        else:
+            self.cpp("norm_A = {};".format(A.name))
+        if transB:
+            self.cpp("norm_B({}) = {}({});".format(
+                ','.join(dim_vars[:2][::-1]),
+                B.name, ','.join(dim_vars[:2])))
+        else:
+            self.cpp("norm_B = {};".format(B.name))
+        self.cpp("norm_C({}) = {}({});".format(
+            ','.join(dim_vars[::-1]),
+            C.name, ','.join([dv if cs > 1 else "0" \
+                              for dv, cs in zip(dim_vars[:2],
+                                                C.shape)][::-1])))
+
+        self.cpp("{}({}) = {}*norm_C({})+{}*sum(norm_A({})*norm_B({}));".format(
+            Y.name, ','.join(dim_vars[::-1]),
+            beta,
+            ','.join(dim_vars[::-1]),
+            alpha,
+            ','.join([dim_vars[0], "r"][::-1]),
+            ','.join(["r", dim_vars[1]][::-1])))
+        
 
     def generate_pad(self, node):
         ip = self.funcs[node.input[0]]
@@ -956,6 +1014,8 @@ class HalideBackendRep(BackendRep):
             self.generate_flatten(node)
         elif node.op_type == "Gather":
             self.generate_gather(node)
+        elif node.op_type == "Gemm":
+            self.generate_gemm(node)
         elif node.op_type == "Expand":
             raise NotImplementedError
         else:
