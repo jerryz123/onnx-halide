@@ -15,6 +15,7 @@ C_TYPE_DECODER = lambda x: {"FLOAT16": "float16_t",
                             "FLOAT"  : "float",
                             "DOUBLE" : "double",
                             "BOOL"   : "int8_t",
+                            "INT32"  : "int32_t",
                             "INT64"  : "int64_t"}\
                  [ONNX_TYPE_DECODER(x)]
 
@@ -22,23 +23,27 @@ NP_TYPE_DECODER = lambda x: {"float16_t": np.float16,
                              "float"    : np.float32,
                              "double"   : np.float64,
                              "int8_t"   : np.bool,
+                             "int32_t"  : np.int32,
                              "int64_t"  : np.int64}[x]
 
 CTYPE_TYPE_DECODER = lambda x: {"float16_t": ctypes.c_short,
                                 "float"    : ctypes.c_float,
                                 "double"   : ctypes.c_double,
                                 "int8_t"   : ctypes.c_char,
+                                "int32_t"  : ctypes.c_int,
                                 "int64_t"  : ctypes.c_longlong}[x]
 
 MIN_TYPE_DECODER = lambda x: {"float16_t": "float16_t.make_infinity(0)",
                               "float"    : "cast<float>(Expr(-FLT_MAX))",
                               "double"   : "cast<double>(Expr(-DBL_MAX))",
                               "int8_t"   : "cast<int8_t>(Expr(-CHAR_MAX))",
+                              "int32_t"   : "cast<int8_t>(Expr(-INT_MAX))",
                               "int64_t"  : "cast<int64_t>(Expr(-LLONG_MAX))"}[x]
 MAX_TYPE_DECODER = lambda x: {"float16_t": "float16_t.make_infinity(1)",
                               "float"    : "cast<float>(Expr(FLT_MAX))",
                               "double"   : "cast<double>(Expr(DBL_MAX))",
                               "int8_t"   : "cast<int8_t>(Expr(CHAR_MAX))",
+                              "int32_t"   : "cast<int8_t>(Expr(INT_MAX))",
                               "int64_t"  : "cast<int64_t>(Expr(LLONG_MAX))"}[x]
 
 class OnnxAttr:
@@ -344,9 +349,11 @@ class HalideBackendRep(BackendRep):
         op_type = ip.type
         min_v   = MIN_TYPE_DECODER(op_type)
         max_v   = MAX_TYPE_DECODER(op_type)
-
+        alpha   = 1.0
 
         for attr in node.attribute:
+            if attr.name == "alpha":
+                alpha = attr.f
             if attr.name == "to":
                 op_type = C_TYPE_DECODER(attr.i)
             if attr.name == "max":
@@ -361,6 +368,8 @@ class HalideBackendRep(BackendRep):
             expr = expr.format(ip_expr, op_type)
         elif node.op_type == "Clip":
             expr = expr.format(ip_expr, min_v, max_v)
+        elif node.op_type == "Elu":
+            expr = expr.format(ip_expr, alpha, ip.type)
         else:
             expr = expr.format(ip_expr)
 
@@ -371,10 +380,13 @@ class HalideBackendRep(BackendRep):
         op.set_shape(ip.shape)
         op.set_type(op_type)
 
-    def generate_bin_expr(self, node, expr):
+    def generate_bin_expr(self, node, expr, op_type=None):
         ip0 = self.funcs[node.input[0]]
         ip1 = self.funcs[node.input[1]]
         op  = self.funcs[node.output[0]]
+
+        if not op_type:
+            op_type = ip0.type
         assert(ip0.type == ip1.type)
         ip0_dim = ip0.shape
         ip1_dim = ip1.shape
@@ -387,8 +399,9 @@ class HalideBackendRep(BackendRep):
 
 
 
-        self.cpp("{}({}) = {}({}) {} {}({});".format(
+        self.cpp("{}({}) = cast<{}>({}({}) {} {}({}));".format(
             op.name, ",".join(dim_vars[::-1]),
+            op_type,
             ip0.name, ",".join(ip0_dim_vars[::-1]),
             expr,
             ip1.name, ",".join(ip1_dim_vars[::-1])))
@@ -398,8 +411,44 @@ class HalideBackendRep(BackendRep):
              (ip0_dim[-i] if i > len(ip1_dim) else
               max(ip0_dim[-i], ip1_dim[-i])) \
              for i in range(1, dims+1)][::-1])
-        op.set_type(ip0.type)
+        op.set_type(op_type)
 
+    def generate_flatten(self, node):
+        ip = self.funcs[node.input[0]]
+        op = self.funcs[node.output[0]]
+        axis = 1
+        for attr in node.attribute:
+            if attr.name == "axis":
+                axis = attr.i
+        op_shape = ip.shape
+        dim_vars = self.generate_dim_vars(2)
+        if axis == 0:
+            op_shape = [1] + [np.prod(ip.shape)]
+            prevs = ip.shape[1:] + [1]
+            prods = [np.prod(prevs[i:]) for i in range(len(prevs))]
+            ip_vars = ["cast<int>(floor({}/{}))%{}".format(dim_vars[1], prod, ips) for ips, prod in zip(
+                ip.shape,
+                prods)]
+            print(ip_vars)
+        else:
+            op_shape = [np.prod(ip.shape[:axis])] + [np.prod(ip.shape[axis:])]
+            pprevs = ip.shape[axis:] + [1]
+            pprods = [np.prod(pprevs[i:]) for i in range(len(pprevs))]
+            fprevs = ip.shape[:axis] + [1]
+            fprods = [np.prod(fprevs[i:]) for i in range(len(fprevs))]
+            ip_vars = ["cast<int>(floor({}/{}))%{}".format(dim_vars[0], prod, ips) for ips, prod in zip(
+                fprevs,
+                fprods[1:])] \
+                      + ["cast<int>(floor({}/{}))%{}".format(dim_vars[1], prod, ips) for ips, prod in zip(
+                          pprevs,
+                          pprods[1:])]
+
+        self.cpp("{}({}) = {}({});".format(
+            op.name, ','.join(dim_vars[::-1]),
+            ip.name, ','.join((ip_vars[::-1]))))
+
+        op.set_shape(op_shape)
+        op.set_type(ip.type)
 
     def generate_red_expr(self, node, expr, type=None):
         ip    = self.funcs[node.input[0]]
@@ -504,7 +553,7 @@ class HalideBackendRep(BackendRep):
         mode = "constant"
         for attr in node.attribute:
             if attr.name == "mode":
-                mode = attr.s
+                mode = attr.s.decode()
             if attr.name == "pads":
                 pads = [(a, b) for a, b in zip(
                     attr.ints[:len(attr.ints)//2],
@@ -519,11 +568,21 @@ class HalideBackendRep(BackendRep):
                     for pad, ips in zip(
                             [None] * n_ign_dims + pads,
                             ip.shape)]
-        self.cpp("Func padded = BoundaryConditions::constant_exterior({}, {}, {{{}}});".format(
-            ip.name,
-            const, ','.join(["{{0, {}}}".format(ips) \
-                             for ips in ip.shape[::-1]])))
-
+        if mode == "constant":
+            self.cpp("Func padded = BoundaryConditions::constant_exterior({}, {}, {{{}}});".format(
+                ip.name,
+                const, ','.join(["{{0, {}}}".format(ips) \
+                                 for ips in ip.shape[::-1]])))
+        elif mode == "edge":
+            self.cpp("Func padded = BoundaryConditions::repeat_edge({}, {{{}}});".format(
+                ip.name,
+                ','.join(["{{0, {}}}".format(ips) \
+                          for ips in ip.shape[::-1]])))
+        elif mode == "reflect":
+            self.cpp("Func padded = BoundaryConditions::miccor_image({}, {{{}}});".format(
+                ip.name,
+                ','.join(["{{0, {}}}".format(ips) \
+                          for ips in ip.shape[::-1]])))
         ip_vars = ["{}-{}".format(dv, pad[0]) if pad else dv \
                    for dv, pad in zip(dim_vars,
                                       [None] * n_ign_dims + pads)]
@@ -838,12 +897,20 @@ class HalideBackendRep(BackendRep):
             self.generate_unary_expr(node, "clamp({}, {}, {})")
         elif node.op_type == "Cast":
             self.generate_unary_expr(node, "cast<{1}>({0})")
+        elif node.op_type == "Dropout":
+            self.generate_unary_expr(node, "{}")
+        elif node.op_type == "Elu":
+            self.generate_unary_expr(node, "select({0} < 0, cast<{2}>(Expr({1}) * (exp({0}) - Expr(1.))), {0})")
+        elif node.op_type == "Exp":
+            self.generate_unary_expr(node, "exp({})")
         elif node.op_type == "Add":
             self.generate_bin_expr(node, "+")
         elif node.op_type == "And":
             self.generate_bin_expr(node, "&")
         elif node.op_type == "Div":
             self.generate_bin_expr(node, "/")
+        elif node.op_type == "Equal":
+            self.generate_bin_expr(node, "==", "int8_t")
         elif node.op_type == "ArgMax":
             self.generate_red_expr(node, "argmax", "int64_t")
         elif node.op_type == "ArgMin":
@@ -862,6 +929,10 @@ class HalideBackendRep(BackendRep):
             self.generate_pad(node)
         elif node.op_type == "DepthToSpace":
             self.generate_dtos(node)
+        elif node.op_type == "Flatten":
+            self.generate_flatten(node)
+        elif node.op_type == "Expand":
+            raise NotImplementedError
         else:
             print()
             print("unhandled node ", node.op_type)
