@@ -689,8 +689,33 @@ class HalideBackendRep(BackendRep):
 
         op.set_shape(op_shape)
         op.set_type(ip.type)
-        
 
+    def generate_dtos(self, node):
+        ip  = self.funcs[node.input[0]]
+        op  = self.funcs[node.output[0]]
+        N, C, H, W = ip.shape
+        blocksize = None
+        for attr in node.attribute:
+            if attr.name == "blocksize":
+                blocksize = attr.i
+        op.set_shape([N, C//(blocksize*blocksize), H*blocksize, W*blocksize])
+        op.set_type(ip.type)
+        dim_vars = self.generate_dim_vars(4)
+
+        ip_vars = [dim_vars[0],
+                   "{}+({}%{})*{}+({}%{})*{}".format(
+                       dim_vars[1],
+                       dim_vars[3], blocksize, ip.shape[1] // (blocksize**2),
+                       dim_vars[2], blocksize, ip.shape[1] // blocksize),
+                   "cast<int>({}/{})".format(
+                       dim_vars[2], blocksize),
+                   "cast<int>({}/{})".format(
+                       dim_vars[3],
+                       blocksize)]
+        self.cpp("{}({}) = {}({});".format(
+            op.name, ','.join(dim_vars[::-1]),
+            ip.name, ','.join(ip_vars[::-1])
+        ))
     def generate_pool(self, node):
         ip    = self.funcs[node.input[0]]
         op    = self.funcs[node.output[0]]
@@ -807,6 +832,8 @@ class HalideBackendRep(BackendRep):
             self.generate_unary_expr(node, "atan({})")
         elif node.op_type == "Ceil":
             self.generate_unary_expr(node, "ceil({})")
+        elif node.op_type == "Cos":
+            self.generate_unary_expr(node, "cos({})")
         elif node.op_type == "Clip":
             self.generate_unary_expr(node, "clamp({}, {}, {})")
         elif node.op_type == "Cast":
@@ -833,6 +860,8 @@ class HalideBackendRep(BackendRep):
             self.generate_concat(node)
         elif node.op_type == "Pad":
             self.generate_pad(node)
+        elif node.op_type == "DepthToSpace":
+            self.generate_dtos(node)
         else:
             print()
             print("unhandled node ", node.op_type)
