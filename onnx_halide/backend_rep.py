@@ -46,6 +46,8 @@ MAX_TYPE_DECODER = lambda x: {"float16_t": "float16_t.make_infinity(1)",
                               "int32_t"   : "cast<int8_t>(Expr(INT_MAX))",
                               "int64_t"  : "cast<int64_t>(Expr(LLONG_MAX))"}[x]
 
+JOIN_VARS = lambda vars: ','.join(vars[::-1])
+
 class OnnxAttr:
     def __init__(self, attr, v_fn=lambda x:x, value=None, type=None):
         self.value = value
@@ -343,6 +345,11 @@ class HalideBackendRep(BackendRep):
             self.generate_var(dim_var)
         return dim_vars
 
+    def generate_rdom(self, shape):
+        self.cpp("RDom r({});".format(','.join(["0,{}".format(s) \
+                                                for s in shape])))
+        return ["r[{}]".format(i) for i in range(len(shape))]
+
     def generate_unary_expr(self, node, expr):
         ip      = self.funcs[node.input[0]]
         op      = self.funcs[node.output[0]]
@@ -622,8 +629,28 @@ class HalideBackendRep(BackendRep):
             alpha,
             ','.join([dim_vars[0], "r"][::-1]),
             ','.join(["r", dim_vars[1]][::-1])))
-        
 
+    def generate_hardmax(self, node):
+        ip = self.funcs[node.input[0]]
+        op = self.funcs[node.output[0]]
+        op.set_shape(ip.shape)
+        op.set_type(ip.type)
+        axis = 1
+        for attr in node.attribute:
+            if attr.name == "axis":
+                axis = attr.i
+        dim_vars = self.generate_dim_vars(len(ip.shape))
+        red_vars = self.generate_rdom(ip.shape[axis:])
+
+        ip_vars = dim_vars[:axis] + red_vars
+        self.cpp("Tuple am = argmax({}({}));".format(
+            ip.name, JOIN_VARS(ip_vars)))
+        self.cpp("{}({}) = cast<{}>({});".format(
+            op.name, JOIN_VARS(dim_vars),
+            op.type,
+            "&&".join(["(am[{}]=={})".format(i, dv) for \
+                       i, dv in enumerate(dim_vars[axis:])])))
+            
     def generate_pad(self, node):
         ip = self.funcs[node.input[0]]
         op = self.funcs[node.output[0]]
@@ -879,7 +906,7 @@ class HalideBackendRep(BackendRep):
             if attr.name == "strides":
                 strides = list(attr.ints)
         if not pool_shape:
-            pool_shape = w.shape[2:]
+            pool_shape = ip.shape[2:]
         if not pads:
             if auto_pad == "SAME_UPPER":
                 pads = [(floor((ks-1)/2), ceil((ks-1)/2)) \
@@ -919,25 +946,31 @@ class HalideBackendRep(BackendRep):
             self.cpp("Func padded = {};".format(ip.name))
         self.cpp()
         self.cpp("Func counts;")
-        if count_include_pad:
-            self.cpp("counts({}) = {};".format(
-                ','.join(dim_vars[::-1][:len(red_vars)]),
-                filter_area))
-        else:
-            self.cpp("Func ones;")
-            self.cpp("ones({}) = 1;".format(
+
+        if node.op_type in ["AveragePool", "GlobalAveragePool"]:
+            if count_include_pad:
+                self.cpp("counts({}) = {};".format(
+                    ','.join(dim_vars[::-1][:len(red_vars)]),
+                    filter_area))
+            else:
+                self.cpp("Func ones;")
+                self.cpp("ones({}) = 1;".format(
+                    ','.join(dim_vars[::-1][:len(red_vars)])))
+                self.cpp("Func padded_ones = BoundaryConditions::constant_exterior(ones, 0, {{{}}});".format(
+                    ','.join(["{{0,{}}}".format(s) \
+                              for s in ip.shape[::-1][:len(red_vars)]])))
+                self.cpp("counts({}) = sum(padded_ones({}));".format(
+                    ','.join(dim_vars[::-1][:len(red_vars)]),
+                    ','.join(ip_vars[::-1][:len(red_vars)])
+                ))
+            self.cpp("{}({}) = sum(padded({})) / counts({});".format(
+                op.name, ','.join(dim_vars[::-1]),
+                ','.join(ip_vars[::-1]),
                 ','.join(dim_vars[::-1][:len(red_vars)])))
-            self.cpp("Func padded_ones = BoundaryConditions::constant_exterior(ones, 0, {{{}}});".format(
-                ','.join(["{{0,{}}}".format(s) \
-                          for s in ip.shape[::-1][:len(red_vars)]])))
-            self.cpp("counts({}) = sum(padded_ones({}));".format(
-                ','.join(dim_vars[::-1][:len(red_vars)]),
-                ','.join(ip_vars[::-1][:len(red_vars)])
-            ))
-        self.cpp("{}({}) = sum(padded({})) / counts({});".format(
-            op.name, ','.join(dim_vars[::-1]),
-            ','.join(ip_vars[::-1]),
-            ','.join(dim_vars[::-1][:len(red_vars)])))
+        elif node.op_type in ["MaxPool", "GlobalMaxPool"]:
+            self.cpp("{}({}) = maximum(padded({}));".format(
+                op.name, ','.join(dim_vars[::-1]),
+                ','.join(ip_vars[::-1])))
 
         op_shape = [floor((ips+pad[0]+pad[1]-ks)/stride+1) \
                     if pad else ips \
@@ -992,6 +1025,8 @@ class HalideBackendRep(BackendRep):
             self.generate_bin_expr(node, "/")
         elif node.op_type == "Equal":
             self.generate_bin_expr(node, "==", "int8_t")
+        elif node.op_type == "Greater":
+            self.generate_bin_expr(node, ">", "int8_t")
         elif node.op_type == "ArgMax":
             self.generate_red_expr(node, "argmax", "int64_t")
         elif node.op_type == "ArgMin":
@@ -999,6 +1034,10 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "BatchNormalization":
             self.generate_bn(node)
         elif node.op_type == "AveragePool":
+            self.generate_pool(node)
+        elif node.op_type == "GlobalAveragePool":
+            self.generate_pool(node)
+        elif node.op_type == "GlobalMaxPool":
             self.generate_pool(node)
         elif node.op_type == "Conv":
             self.generate_conv(node)
@@ -1016,6 +1055,10 @@ class HalideBackendRep(BackendRep):
             self.generate_gather(node)
         elif node.op_type == "Gemm":
             self.generate_gemm(node)
+        elif node.op_type == "Hardmax":
+            self.generate_hardmax(node)
+        elif node.op_type == "GRU":
+            raise NotImplementedError
         elif node.op_type == "Expand":
             raise NotImplementedError
         else:
