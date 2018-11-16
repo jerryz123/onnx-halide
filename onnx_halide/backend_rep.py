@@ -48,6 +48,7 @@ MAX_TYPE_DECODER = lambda x: {"float16_t": "float16_t.make_infinity(1)",
 
 JOIN_VARS = lambda vars: ','.join(vars[::-1])
 
+CAST = lambda expr, type: "cast<{}>(Expr({}))".format(type, expr)
 class OnnxAttr:
     def __init__(self, attr, v_fn=lambda x:x, value=None, type=None):
         self.value = value
@@ -361,6 +362,8 @@ class HalideBackendRep(BackendRep):
             alpha = 1.0
         elif node.op_type == "HardSigmoid":
             alpha = 0.2
+        elif node.op_type == "LeakyRelu":
+            alpha = 0.01
         beta    = 0.5
         for attr in node.attribute:
             if attr.name == "alpha":
@@ -388,6 +391,8 @@ class HalideBackendRep(BackendRep):
             expr = expr.format(ip_expr, alpha, ip.type)
         elif node.op_type == "HardSigmoid":
             expr = expr.format(ip_expr, alpha, beta)
+        elif node.op_type == "LeakyRelu":
+            expr = expr.format(ip_expr, alpha)
         else:
             expr = expr.format(ip_expr)
 
@@ -616,6 +621,42 @@ class HalideBackendRep(BackendRep):
                                + ["clamp(cast<int>({}({})), 0, {})".format(ids.name, dim_vars[axis], ip.shape[axis]-1)] \
                                + dim_vars[axis+1:])[::-1])))
 
+    def generate_matmul(self, node):
+        a   = self.funcs[node.input[0]]
+        b   = self.funcs[node.input[1]]
+        c   = self.funcs[node.output[0]]
+
+        K = a.shape[-1]
+        red_var = self.generate_rdom([K])[0]
+        c.set_type(a.type)
+        if len(a.shape) == len(b.shape) == 2:
+            c.set_shape([a.shape[0], b.shape[1]])
+            dim_vars = self.generate_dim_vars(len(c.shape))
+            a_vars = [dim_vars[0], red_var]
+            b_vars = [red_var, dim_vars[1]]
+        elif len(a.shape) > 2 and len(b.shape) == 2:
+            c.set_shape(a.shape[:-1] + [b.shape[1]])
+            dim_vars = self.generate_dim_vars(len(c.shape))
+            a_vars = dim_vars[:-1] + [red_var]
+            b_vars = [red_var, dim_vars[-1]]
+        elif len(b.shape) > 2 and len(a.shape) == 2:
+            c.set_shape(b.shape[:-2] + [a.shape[0], b.shape[-1]])
+            dim_vars = self.generate_dim_vars(len(c.shape))
+            a_vars = [dim_vars[-2], red_var]
+            b_vars = dim_vars[:-2] + [red_var, dim_vars[-1]]
+        elif len(a.shape) > 2 and len(b.shape) > 2:
+            c.set_shape(b.shape[:-2] + [a.shape[-2], b.shape[-1]])
+            dim_vars = self.generate_dim_vars(len(c.shape))
+            a_vars = dim_vars[:-1] + [red_var]
+            b_vars = dim_vars[:-2] + [red_var, dim_vars[-1]]
+
+
+        self.cpp("{}({}) = sum({}({})*{}({}));".format(
+            c.name, JOIN_VARS(dim_vars),
+            a.name, JOIN_VARS(a_vars),
+            b.name, JOIN_VARS(b_vars)))
+            
+        
     def generate_gemm(self, node):
         A   = self.funcs[node.input[0]]
         B   = self.funcs[node.input[1]]
@@ -673,8 +714,51 @@ class HalideBackendRep(BackendRep):
             alpha,
             ','.join([dim_vars[0], "r"][::-1]),
             ','.join(["r", dim_vars[1]][::-1])))
-
-    def generate_hardmax(self, node):
+        
+    def generate_lrn(self, node):
+        ip = self.funcs[node.input[0]]
+        op = self.funcs[node.output[0]]
+        alpha = 0.0001
+        beta  = 0.75
+        bias  = 1.0
+        size  = None
+        for attr in node.attribute:
+            if attr.name == "alpha":
+                alpha = attr.f
+            if attr.name == "beta":
+                beta = attr.f
+            if attr.name == "bias":
+                bias = attr.f
+            if attr.name == "size":
+                size = attr.i
+ 
+        op.set_shape(ip.shape)
+        op.set_type(ip.type)
+        dim_vars = self.generate_dim_vars(len(op.shape))
+        self.cpp("RDom r({}, {});".format(
+            -floor((size-1)/2),
+            ceil((size-1)/2)))
+        self.cpp("Func padded = BoundaryConditions::constant_exterior({},0,{{{}}});".format(
+            ip.name,
+            JOIN_VARS(["{Expr(),Expr()}" if i != 1 else \
+                       "{{0, {}}}".format(ip.shape[1]) for i in \
+                       range(len(ip.shape))])))
+        self.generate_func("sq_sum")
+        self.cpp("sq_sum({}) = sum(pow(padded({}), 2));".format(
+            JOIN_VARS(dim_vars),
+            JOIN_VARS([dim_vars[0]] + ["r"] + dim_vars[2:])
+        ))
+        alpha = CAST(alpha, op.type)
+        beta  = CAST(beta, op.type)
+        bias  = CAST(bias, op.type)
+        size  = CAST(size, op.type)
+        self.cpp("{}({}) = {}({})/pow({}+({}/{})*sq_sum({}), {});".format(
+            op.name, JOIN_VARS(dim_vars),
+            ip.name, JOIN_VARS(dim_vars),
+            bias, alpha, size,
+            JOIN_VARS(dim_vars),
+            beta))
+    def generate_featuremax(self, node):
         ip = self.funcs[node.input[0]]
         op = self.funcs[node.output[0]]
         op.set_shape(ip.shape)
@@ -687,14 +771,24 @@ class HalideBackendRep(BackendRep):
         red_vars = self.generate_rdom(ip.shape[axis:])
 
         ip_vars = dim_vars[:axis] + red_vars
-        self.cpp("Tuple am = argmax({}({}));".format(
-            ip.name, JOIN_VARS(ip_vars)))
-        self.cpp("{}({}) = cast<{}>({});".format(
-            op.name, JOIN_VARS(dim_vars),
-            op.type,
-            "&&".join(["(am[{}]=={})".format(i, dv) for \
-                       i, dv in enumerate(dim_vars[axis:])])))
-            
+        if node.op_type == "Hardmax":
+            self.cpp("Tuple am = argmax({}({}));".format(
+                ip.name, JOIN_VARS(ip_vars)))
+            self.cpp("{}({}) = cast<{}>({});".format(
+                op.name, JOIN_VARS(dim_vars),
+                op.type,
+                "&&".join(["(am[{}]=={})".format(i, dv) for \
+                           i, dv in enumerate(dim_vars[axis:])])))
+        elif node.op_type == "LogSoftmax":
+            self.generate_func("norm_ip")
+            self.cpp("norm_ip({}) = {}({}) - maximum({}({}));".format(
+                JOIN_VARS(dim_vars),
+                ip.name, JOIN_VARS(dim_vars),
+                ip.name, JOIN_VARS(ip_vars)))
+            self.cpp("{}({}) = norm_ip({})-log(sum(exp(norm_ip({}))));".format(
+                op.name, JOIN_VARS(dim_vars),
+                JOIN_VARS(dim_vars),
+                JOIN_VARS(ip_vars)))
     def generate_pad(self, node):
         ip = self.funcs[node.input[0]]
         op = self.funcs[node.output[0]]
@@ -1066,6 +1160,10 @@ class HalideBackendRep(BackendRep):
                                      "clamp({}*{}+{},0,1)")
         elif node.op_type == "Identity":
             self.generate_unary_expr(node, "{}")
+        elif node.op_type == "LeakyRelu":
+            self.generate_unary_expr(node, "select({0}<0,{1}*{0},{0})")
+        elif node.op_type == "Log":
+            self.generate_unary_expr(node, "log({})")
         elif node.op_type == "Add":
             self.generate_bin_expr(node, "+")
         elif node.op_type == "And":
@@ -1076,6 +1174,8 @@ class HalideBackendRep(BackendRep):
             self.generate_bin_expr(node, "==", "int8_t")
         elif node.op_type == "Greater":
             self.generate_bin_expr(node, ">", "int8_t")
+        elif node.op_type == "Less":
+            self.generate_bin_expr(node, "<", "int8_t")
         elif node.op_type == "ArgMax":
             self.generate_red_expr(node, "argmax", "int64_t")
         elif node.op_type == "ArgMin":
@@ -1106,8 +1206,14 @@ class HalideBackendRep(BackendRep):
             self.generate_gather(node)
         elif node.op_type == "Gemm":
             self.generate_gemm(node)
+        elif node.op_type == "MatMul":
+            self.generate_matmul(node)
         elif node.op_type == "Hardmax":
-            self.generate_hardmax(node)
+            self.generate_featuremax(node)
+        elif node.op_type == "LogSoftmax":
+            self.generate_featuremax(node)
+        elif node.op_type == "LRN":
+            self.generate_lrn(node)
         elif node.op_type == "GRU":
             raise NotImplementedError
         elif node.op_type == "Expand":
