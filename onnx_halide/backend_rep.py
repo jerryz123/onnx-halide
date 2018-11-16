@@ -523,7 +523,8 @@ class HalideBackendRep(BackendRep):
             if attr.name == "axis":
                 axis = attr.i
         n_dims = len(ip0.shape)
-        op_shape = [ip0s + ip1s if i == axis else ip0s for i, (ip0s, ip1s) in enumerate(zip(ip0.shape, ip1.shape))]
+        op_shape = [ip0s + ip1s if i == axis else ip0s for i, (ip0s, ip1s) \
+                    in enumerate(zip(ip0.shape, ip1.shape))]
         dim_vars = self.generate_dim_vars(n_dims)
 
         ip0_dim_vars = ["clamp({}, 0, {})".format(v,
@@ -544,6 +545,26 @@ class HalideBackendRep(BackendRep):
 
         op.set_shape(op_shape)
         op.set_type(ip0.type)
+
+    def generate_gather(self, node):
+        ip  = self.funcs[node.input[0]]
+        ids = self.funcs[node.input[1]]
+        op  = self.funcs[node.output[0]]
+        axis = 0
+        for attr in node.attribute:
+            if attr.name == "axis":
+                axis = attr.i
+
+        op_shape = ip.shape[:axis] + ids.shape + ip.shape[axis+1:]
+        op.set_shape(op_shape)
+        op.set_type(ip.type)
+        dim_vars = self.generate_dim_vars(len(op_shape))
+        self.cpp("{}({}) = {}({});".format(
+            op.name, ','.join(dim_vars[::-1]),
+            ip.name, ','.join((dim_vars[:axis] \
+                               + ["clamp(cast<int>({}({})), 0, {})".format(ids.name, dim_vars[axis], ip.shape[axis]-1)] \
+                               + dim_vars[axis+1:])[::-1])))
+
 
     def generate_pad(self, node):
         ip = self.funcs[node.input[0]]
@@ -903,6 +924,8 @@ class HalideBackendRep(BackendRep):
             self.generate_unary_expr(node, "select({0} < 0, cast<{2}>(Expr({1}) * (exp({0}) - Expr(1.))), {0})")
         elif node.op_type == "Exp":
             self.generate_unary_expr(node, "exp({})")
+        elif node.op_type == "Floor":
+            self.generate_unary_expr(node, "floor({})")
         elif node.op_type == "Add":
             self.generate_bin_expr(node, "+")
         elif node.op_type == "And":
@@ -931,6 +954,8 @@ class HalideBackendRep(BackendRep):
             self.generate_dtos(node)
         elif node.op_type == "Flatten":
             self.generate_flatten(node)
+        elif node.op_type == "Gather":
+            self.generate_gather(node)
         elif node.op_type == "Expand":
             raise NotImplementedError
         else:
