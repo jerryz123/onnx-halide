@@ -145,8 +145,6 @@ class HalideBackendRep(BackendRep):
 
 
     def generate_csrc(self, model):
-
-
         self.cpp("#include \"Halide.h\"")
         self.cpp("#include <stdint.h>")
         self.cpp("#include <cfloat>")
@@ -204,10 +202,6 @@ class HalideBackendRep(BackendRep):
                 self.funcs[tensor.name] = HalideObj(func_name,
                                                     c_shape,
                                                     c_type)
-            else:
-                output_strs.append("cast<{}>({}).realize({});".format(
-                    c_type,
-                    func_name, buf_name))
             self.cpp()
 
         # Create arrays for constant nodes
@@ -268,7 +262,7 @@ class HalideBackendRep(BackendRep):
         for tensor, _ in outputs:
             func = self.funcs[tensor.name]
             buf  = self.buffers[tensor.name]
-            self.cpp("{}.realize({});".format(func_name, buf.name))
+            self.cpp("{}.realize({});".format(func.name, buf.name))
             if not (func.shape == buf.shape and func.type == buf.type):
                 print("{}{} != {}{}".format(func.type, func.shape,
                                             buf.type, buf.shape))
@@ -403,6 +397,34 @@ class HalideBackendRep(BackendRep):
         op.set_shape(ip.shape)
         op.set_type(op_type)
 
+    def generate_var_expr(self, node):
+        ips = [self.funcs[i] for i in node.input]
+        op  = self.funcs[node.output[0]]
+        dims = max([len(ip.shape) for ip in ips])
+        dim_vars = self.generate_dim_vars(dims)
+        op_shape = [1] * dims
+        ip_vars = []
+        op.set_type(ips[0].type)
+        if (len(ips) == 1):
+            op.set_shape(ips[0].shape)
+            self.cpp("{}({}) = {}({});".format(
+                op.name, JOIN_VARS(dim_vars),
+                ips[0].name, JOIN_VARS(dim_vars)))
+        else:
+            for ip in ips:
+                op_shape = [op_shape[-i] if i > len(ip.shape) else
+                            max(ip.shape[-i], op_shape[-i]) for \
+                            i in range(1, dims+1)][::-1]
+                ip_vars.append([(dv if dim > 1 else "0") for dim, dv in
+                                zip(ip.shape, dim_vars[-len(ip.shape):])])
+            op.set_shape(op_shape)
+
+            self.cpp("{}({}) = max({});".format(
+                op.name, JOIN_VARS(dim_vars),
+                JOIN_VARS(["{}({})".format(ip.name, JOIN_VARS(ipv)) for
+                           ip, ipv in
+                           zip(ips, ip_vars)])))
+
     def generate_bin_expr(self, node, expr, op_type=None):
         ip0 = self.funcs[node.input[0]]
         ip1 = self.funcs[node.input[1]]
@@ -421,13 +443,15 @@ class HalideBackendRep(BackendRep):
                         zip(ip1_dim, dim_vars[-len(ip1_dim):])]
 
 
+        ip0_expr = "{}({})".format(ip0.name, JOIN_VARS(ip0_dim_vars))
+        ip1_expr = "{}({})".format(ip1.name, JOIN_VARS(ip0_dim_vars))
+        expr = expr.format(ip0_expr, ip1_expr)
 
-        self.cpp("{}({}) = cast<{}>({}({}) {} {}({}));".format(
+        self.cpp("{}({}) = cast<{}>({});".format(
             op.name, ",".join(dim_vars[::-1]),
             op_type,
-            ip0.name, ",".join(ip0_dim_vars[::-1]),
             expr,
-            ip1.name, ",".join(ip1_dim_vars[::-1])))
+            ))
 
         op.set_shape(
             [ip1_dim[-i] if i > len(ip0_dim) else
@@ -629,6 +653,7 @@ class HalideBackendRep(BackendRep):
         K = a.shape[-1]
         red_var = self.generate_rdom([K])[0]
         c.set_type(a.type)
+        # TODO : Add broadcasting here
         if len(a.shape) == len(b.shape) == 2:
             c.set_shape([a.shape[0], b.shape[1]])
             dim_vars = self.generate_dim_vars(len(c.shape))
@@ -1022,13 +1047,16 @@ class HalideBackendRep(BackendRep):
     def generate_pool(self, node):
         ip    = self.funcs[node.input[0]]
         op    = self.funcs[node.output[0]]
-
+        id    = None
+        if len(node.output) > 1:
+            id= self.funcs[node.output[1]]
         pool_shape        = None
         count_include_pad = False
         pads              = None
         padded            = False
         auto_pad          = None
         strides           = None
+        storage_order     = 0
         for attr in node.attribute:
             if attr.name == "kernel_shape":
                 pool_shape = list(attr.ints)
@@ -1043,6 +1071,8 @@ class HalideBackendRep(BackendRep):
                 auto_pad = attr.s.decode()
             if attr.name == "strides":
                 strides = list(attr.ints)
+            if attr.name == "storage_order":
+                storage_order = attr.i
         if not pool_shape:
             pool_shape = ip.shape[2:]
         if not pads:
@@ -1073,10 +1103,25 @@ class HalideBackendRep(BackendRep):
                            [None] * n_ign_dims + red_vars,
                            [None] * n_ign_dims + strides,
                            [None] * n_ign_dims + pads)]
+        if node.op_type in ["GlobalMaxPool", "MaxPool"]:
+            pad_const = MIN_TYPE_DECODER(ip.type)
+        else:
+            pad_const = 0
+        op_shape = [floor((ips+pad[0]+pad[1]-ks)/stride+1) \
+                    if pad else ips \
+                    for (ips, pad, ks, stride) \
+                    in zip(ip.shape,
+                           [None] * n_ign_dims + pads,
+                           [None] * n_ign_dims + pool_shape,
+                           [None] * n_ign_dims + strides)]
 
+        op.set_shape(op_shape)
+        op.set_type(ip.type)
+        
         if padded:
-            self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}}});".format(
+            self.cpp("Func padded = BoundaryConditions::constant_exterior({}, {}, {{{}}});".format(
                 ip.name,
+                pad_const,
                 ','.join(["{{0,{}}}".format(s) \
                           if i < len(red_vars) else "{Expr(),Expr()}" \
                           for i, s in enumerate(ip.shape[::-1])])))
@@ -1106,20 +1151,38 @@ class HalideBackendRep(BackendRep):
                 ','.join(ip_vars[::-1]),
                 ','.join(dim_vars[::-1][:len(red_vars)])))
         elif node.op_type in ["MaxPool", "GlobalMaxPool"]:
+            if id:
+                id.set_shape(op.shape)
+                id.set_type("int64_t")
+                self.generate_func("maxed")
+                self.cpp("maxed({}) = argmax(padded({}));".format(
+                    JOIN_VARS(dim_vars),
+                    JOIN_VARS(ip_vars)))
+                prod = ip.shape[::-1]
+                prod = [int(np.prod(prod[:i])) for i in range(len(prod))]
+                if storage_order == 1:
+                    prod[:2] = prod[:2][::-1]
+                maxed_vars = ["({}*{}+maxed({})[{}]-{})*{}".format(dv,
+                                                                   st,
+                                                                   JOIN_VARS(dim_vars),
+                                                                   i-n_ign_dims,
+                                                                   pad[0],
+                                                                   prod)
+                              if rv else "{}*{}".format(dv, prod) \
+                              for i, (dv, rv, st, pad, prod) in enumerate(zip(
+                                      dim_vars,
+                                      [None]*n_ign_dims + red_vars,
+                                      [None]*n_ign_dims + strides,
+                                      [None]*n_ign_dims + pads,
+                                      prod[::-1]))]
+
+                self.cpp("{}({}) = cast<int64_t>({});".format(id.name,
+                                               JOIN_VARS(dim_vars),
+                                               '+'.join(maxed_vars)))
             self.cpp("{}({}) = maximum(padded({}));".format(
                 op.name, ','.join(dim_vars[::-1]),
                 ','.join(ip_vars[::-1])))
 
-        op_shape = [floor((ips+pad[0]+pad[1]-ks)/stride+1) \
-                    if pad else ips \
-                    for (ips, pad, ks, stride) \
-                    in zip(ip.shape,
-                           [None] * n_ign_dims + pads,
-                           [None] * n_ign_dims + pool_shape,
-                           [None] * n_ign_dims + strides)]
-
-        op.set_shape(op_shape)
-        op.set_type(ip.type)
         return
 
     def generate_node(self, nidx, node):
@@ -1165,17 +1228,19 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "Log":
             self.generate_unary_expr(node, "log({})")
         elif node.op_type == "Add":
-            self.generate_bin_expr(node, "+")
+            self.generate_bin_expr(node, "{}+{}")
         elif node.op_type == "And":
-            self.generate_bin_expr(node, "&")
+            self.generate_bin_expr(node, "{}&{}")
         elif node.op_type == "Div":
-            self.generate_bin_expr(node, "/")
+            self.generate_bin_expr(node, "{}/{}")
         elif node.op_type == "Equal":
-            self.generate_bin_expr(node, "==", "int8_t")
+            self.generate_bin_expr(node, "{}=={}", "int8_t")
         elif node.op_type == "Greater":
-            self.generate_bin_expr(node, ">", "int8_t")
+            self.generate_bin_expr(node, "{}>{}", "int8_t")
         elif node.op_type == "Less":
-            self.generate_bin_expr(node, "<", "int8_t")
+            self.generate_bin_expr(node, "{}<{}", "int8_t")
+        elif node.op_type == "Max":
+            self.generate_var_expr(node)
         elif node.op_type == "ArgMax":
             self.generate_red_expr(node, "argmax", "int64_t")
         elif node.op_type == "ArgMin":
@@ -1189,6 +1254,8 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "GlobalAveragePool":
             self.generate_pool(node)
         elif node.op_type == "GlobalMaxPool":
+            self.generate_pool(node)
+        elif node.op_type == "MaxPool":
             self.generate_pool(node)
         elif node.op_type == "Conv":
             self.generate_conv(node)
