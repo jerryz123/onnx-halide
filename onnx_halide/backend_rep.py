@@ -356,17 +356,26 @@ class HalideBackendRep(BackendRep):
         op_type = ip.type
         min_v   = MIN_TYPE_DECODER(op_type)
         max_v   = MAX_TYPE_DECODER(op_type)
-        alpha   = 1.0
-
+        alpha   = None
+        if node.op_type == "Elu":
+            alpha = 1.0
+        elif node.op_type == "HardSigmoid":
+            alpha = 0.2
+        beta    = 0.5
         for attr in node.attribute:
             if attr.name == "alpha":
                 alpha = attr.f
+            if attr.name == "beta":
+                beta = attr.f
             if attr.name == "to":
                 op_type = C_TYPE_DECODER(attr.i)
             if attr.name == "max":
                 max_v = "Expr({})".format(attr.f)
             if attr.name == "min":
                 min_v = "Expr({})".format(attr.f)
+
+        alpha = "cast<{}>(Expr({}))".format(op_type, alpha)
+        beta  = "cast<{}>(Expr({}))".format(op_type, beta)
         dim_vars = self.generate_dim_vars(len(ip.shape))
 
         ip_expr = "{}({})".format(ip.name, ','.join(dim_vars[::-1]))
@@ -377,6 +386,8 @@ class HalideBackendRep(BackendRep):
             expr = expr.format(ip_expr, min_v, max_v)
         elif node.op_type == "Elu":
             expr = expr.format(ip_expr, alpha, ip.type)
+        elif node.op_type == "HardSigmoid":
+            expr = expr.format(ip_expr, alpha, beta)
         else:
             expr = expr.format(ip_expr)
 
@@ -494,6 +505,39 @@ class HalideBackendRep(BackendRep):
         op.set_shape(op_shape)
         op.set_type(op_type)
 
+    def generate_in(self, node):
+        x    = self.funcs[node.input[0]]
+        s    = self.funcs[node.input[1]]
+        b    = self.funcs[node.input[2]]
+        op   = self.funcs[node.output[0]]
+        eps  = 1e-5
+        for attr in node.attribute:
+            if attr.name == "epsilon":
+                eps = attr.f
+        op.set_shape(x.shape)
+        op.set_type(x.type)
+        eps = "cast<{}>(Expr({}))".format(op.type, eps)
+        red_vars = self.generate_rdom(op.shape[2:])
+        dim_vars = self.generate_dim_vars(len(op.shape))
+        self.generate_func("mean_f")
+        self.generate_func("var_f")
+        self.cpp("mean_f({}) = sum({}({}))/{};".format(
+            JOIN_VARS(dim_vars[:2]),
+            x.name, JOIN_VARS(dim_vars[:2] + red_vars),
+            np.prod(x.shape[2:])))
+        self.cpp("var_f({}) = sum(pow({}({}), 2))/{} - pow(mean_f({}), 2);".format(
+            JOIN_VARS(dim_vars[:2]),
+            x.name, JOIN_VARS(dim_vars[:2] + red_vars),
+            np.prod(x.shape[2:]),
+            JOIN_VARS(dim_vars[:2])))
+        self.cpp("{}({}) = {}({})*({}({})-mean_f({}))/(sqrt(var_f({}) + {})) + {}({});".format(
+            op.name, JOIN_VARS(dim_vars),
+            s.name, dim_vars[1],
+            x.name, JOIN_VARS(dim_vars),
+            JOIN_VARS(dim_vars[:2]),
+            JOIN_VARS(dim_vars[:2]),
+            eps,
+            b.name, dim_vars[1]))
     def generate_bn(self, node):
         x    = self.funcs[node.input[0]]
         s    = self.funcs[node.input[1]]
@@ -1012,11 +1056,16 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "Dropout":
             self.generate_unary_expr(node, "{}")
         elif node.op_type == "Elu":
-            self.generate_unary_expr(node, "select({0} < 0, cast<{2}>(Expr({1}) * (exp({0}) - Expr(1.))), {0})")
+            self.generate_unary_expr(node,"select({0} < 0, cast<{2}>(Expr({1}) * (exp({0}) - Expr(1.))), {0})")
         elif node.op_type == "Exp":
             self.generate_unary_expr(node, "exp({})")
         elif node.op_type == "Floor":
             self.generate_unary_expr(node, "floor({})")
+        elif node.op_type == "HardSigmoid":
+            self.generate_unary_expr(node,
+                                     "clamp({}*{}+{},0,1)")
+        elif node.op_type == "Identity":
+            self.generate_unary_expr(node, "{}")
         elif node.op_type == "Add":
             self.generate_bin_expr(node, "+")
         elif node.op_type == "And":
@@ -1033,6 +1082,8 @@ class HalideBackendRep(BackendRep):
             self.generate_red_expr(node, "argmin", "int64_t")
         elif node.op_type == "BatchNormalization":
             self.generate_bn(node)
+        elif node.op_type == "InstanceNormalization":
+            self.generate_in(node)
         elif node.op_type == "AveragePool":
             self.generate_pool(node)
         elif node.op_type == "GlobalAveragePool":
