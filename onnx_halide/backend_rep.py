@@ -7,7 +7,9 @@ import numpy as np
 import importlib
 import os
 from math import floor, ceil
-import random
+
+
+GLOBAL_LIDX = 1 # Hack to avoid library naming collisions
 HALIDE_DIR = "/home/jerry/Projects/Halide"
 
 ONNX_TYPE_DECODER = lambda x:{k: v for (v, k) in TensorProto.DataType.items()}[x]
@@ -106,7 +108,7 @@ def is_loaded(lib):
 
 class HalideBackendRep(BackendRep):
     def __init__(self, model):
-
+        global GLOBAL_LIDX
         self.halide_str = """"""
         self.indent = 0
         self.buffers = {}
@@ -114,7 +116,8 @@ class HalideBackendRep(BackendRep):
         self.model_name = "{}_{}_{}_{}".format(model.graph.name,
                                                model.model_version,
                                                model.domain.replace('.', '-'),
-                                               random.randint(0, 100))
+                                               GLOBAL_LIDX)
+        GLOBAL_LIDX += 1
         self.generate_csrc(model)
     def __del__(self):
         try:
@@ -487,6 +490,22 @@ class HalideBackendRep(BackendRep):
                                zip(ips, ip_vars)]),
                     op.type, len(ips)))
 
+    def generate_prelu_expr(self, node):
+        ip0 = self.funcs[node.input[0]]
+        ip1 = self.funcs[node.input[1]]
+        op  = self.funcs[node.output[0]]
+        op.set_type(ip0.type)
+        op.set_shape(ip0.shape)
+        dim_vars = self.generate_dim_vars(len(ip0.shape))
+        ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in \
+                        zip(ip1.shape, dim_vars)]
+        ip0_expr = "{}({})".format(ip0.name,
+                                   JOIN_VARS(dim_vars))
+        ip1_expr = "{}({})".format(ip1.name,
+                                   JOIN_VARS(ip1_dim_vars))
+        self.cpp("{0}({1}) = select({2}<0, {2}*{3}, {2});".format(
+            op.name, JOIN_VARS(dim_vars),
+            ip0_expr, ip1_expr))
     def generate_bin_expr(self, node, expr, op_type=None):
         ip0 = self.funcs[node.input[0]]
         ip1 = self.funcs[node.input[1]]
@@ -508,7 +527,7 @@ class HalideBackendRep(BackendRep):
             ip0_dim = (1,)
         if ip1.shape:
             ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
-                            zip(ip1_dim, dim_vars[-len(ip1_dim):])]
+                                zip(ip1_dim, dim_vars[-len(ip1_dim):])]
             ip1_expr = "{}({})".format(ip1.name, JOIN_VARS(ip1_dim_vars))
         else:
             ip1_expr = ip1.name
@@ -737,6 +756,7 @@ class HalideBackendRep(BackendRep):
         op.set_type(ip0.type)
 
     def generate_gather(self, node):
+        print(node)
         ip  = self.funcs[node.input[0]]
         ids = self.funcs[node.input[1]]
         op  = self.funcs[node.output[0]]
@@ -749,11 +769,14 @@ class HalideBackendRep(BackendRep):
         op.set_shape(op_shape)
         op.set_type(ip.type)
         dim_vars = self.generate_dim_vars(len(op_shape))
+        ip_vars = dim_vars[:axis] \
+                  + ["clamp(cast<int>({}({})), 0, {})".format(ids.name,
+                                                              JOIN_VARS(dim_vars[:len(ip.shape)]),
+                                                              ip.shape[axis]-1)] \
+                  + dim_vars[len(ip.shape):]
         self.cpp("{}({}) = {}({});".format(
-            op.name, ','.join(dim_vars[::-1]),
-            ip.name, ','.join((dim_vars[:axis] \
-                               + ["clamp(cast<int>({}({})), 0, {})".format(ids.name, dim_vars[axis], ip.shape[axis]-1)] \
-                               + dim_vars[axis+1:])[::-1])))
+            op.name, JOIN_VARS(dim_vars),
+            ip.name, JOIN_VARS(ip_vars)))
     def generate_split(self, node):
         ip  = self.funcs[node.input[0]]
         ops = [self.funcs[o] for o in node.output]
@@ -898,35 +921,35 @@ class HalideBackendRep(BackendRep):
         self.cpp("RDom r(0, {});".format(K))
         Y.set_shape([M, N])
         Y.set_type(C.type)
-        dim_vars = self.generate_dim_vars(len(C.shape))
+        dim_vars = self.generate_dim_vars(len(Y.shape))
         self.generate_func("norm_A")
         self.generate_func("norm_B")
         self.generate_func("norm_C")
         if transA:
             self.cpp("norm_A({}) = {}({});".format(
-                ','.join(dim_vars[:2][::-1]),
-                A.name, ','.join(dim_vars[:2])))
+                JOIN_VARS((dim_vars[:2]),
+                A.name, JOIN_VARS(dim_vars[:2][::-1]))))
         else:
             self.cpp("norm_A = {};".format(A.name))
         if transB:
             self.cpp("norm_B({}) = {}({});".format(
-                ','.join(dim_vars[:2][::-1]),
-                B.name, ','.join(dim_vars[:2])))
+                JOIN_VARS(dim_vars[:2]),
+                B.name, JOIN_VARS(dim_vars[:2][::-1])))
         else:
             self.cpp("norm_B = {};".format(B.name))
         self.cpp("norm_C({}) = {}({});".format(
-            ','.join(dim_vars[::-1]),
-            C.name, ','.join([dv if cs > 1 else "0" \
-                              for dv, cs in zip(dim_vars[:2],
-                                                C.shape)][::-1])))
+            JOIN_VARS(dim_vars[::-1]),
+            C.name, JOIN_VARS([dv if cs > 1 else "0" \
+                               for dv, cs in zip(dim_vars[:2],
+                                                 C.shape)])))
 
         self.cpp("{}({}) = {}*norm_C({})+{}*sum(norm_A({})*norm_B({}));".format(
-            Y.name, ','.join(dim_vars[::-1]),
+            Y.name, JOIN_VARS(dim_vars),
             beta,
-            ','.join(dim_vars[::-1]),
+            JOIN_VARS(dim_vars),
             alpha,
-            ','.join([dim_vars[0], "r"][::-1]),
-            ','.join(["r", dim_vars[1]][::-1])))
+            JOIN_VARS([dim_vars[0], "r"]),
+            JOIN_VARS(["r", dim_vars[1]])))
         
     def generate_lrn(self, node):
         ip = self.funcs[node.input[0]]
@@ -1068,11 +1091,17 @@ class HalideBackendRep(BackendRep):
     def generate_conv(self, node):
         ip    = self.funcs[node.input[0]]
         w     = self.funcs[node.input[1]]
+        if len(node.input) > 2:
+            bias = self.funcs[node.input[2]]
+        else:
+            bias = None
         op    = self.funcs[node.output[0]]
         kernel_shape = None
         pads         = None
         padded       = False
         strides      = None
+        dilations    = None
+        group        = 1
         for attr in node.attribute:
             if attr.name == "kernel_shape":
                 kernel_shape = list(attr.ints)
@@ -1083,6 +1112,10 @@ class HalideBackendRep(BackendRep):
                 padded = True
             if attr.name == "strides":
                 strides = list(attr.ints)
+            if attr.name == "dilations":
+                dilations = list(attr.ints)
+            if attr.name == "group":
+                group = attr.i
         if not kernel_shape:
             kernel_shape = w.shape[2:]
         if not pads:
@@ -1091,20 +1124,29 @@ class HalideBackendRep(BackendRep):
             strides = [1 for i in w.shape[2:]]
 
 
+        op_shape = [ip.shape[0], w.shape[0]] \
+                   + [floor((ips+pad[0]+pad[1]-(ks-1)*dilation-1)/stride+1) \
+                      for (ips, pad, ks, stride, dilation) \
+                      in zip(ip.shape[2:],
+                             pads,
+                             w.shape[2:],
+                             strides,
+                             dilations)]
         dim_vars = self.generate_dim_vars(len(ip.shape))
         self.cpp("RDom r({{{}}}, \"r\");".format(
             ','.join(["{{0,{}}}".format(i) \
-                      for i in [ip.shape[1]] + kernel_shape])))
+                      for i in [w.shape[1]] + kernel_shape])))
         red_vars= ["r[{}]".format(i) for i in range(len(kernel_shape) + 1)]
 
-        ip_vars = [dim_vars[0]] + [red_vars[0]] + \
-                  ["{}*{}+{}-{}".format(dv, stride, rv, pad[0]) for \
-                   dv, rv, pad, stride in \
+        ip_vars = [dim_vars[0]] + ["{}+cast<int>(floor({}/{}))*{}".format(red_vars[0], dim_vars[1], op_shape[1]//group, ip.shape[1]//group)] + \
+                  ["{}*{}+{}*{}-{}".format(dv, stride, rv, dilation, pad[0]) for \
+                   dv, rv, pad, stride, dilation in \
                    zip(dim_vars[2:],
                        red_vars[1:],
                        pads,
-                       strides)]
-        w_vars = [dim_vars[1]] + red_vars
+                       strides,
+                       dilations)]
+        w_vars = [dim_vars[1]] + [red_vars[0]] + red_vars[1:]
         self.cpp()
         if padded:
             self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}, {{Expr(), Expr()}}, {{Expr(), Expr()}}, }});".format(
@@ -1113,23 +1155,28 @@ class HalideBackendRep(BackendRep):
                           for i, s in enumerate(ip.shape[2:][::-1])])))
         else:
             self.cpp("Func padded = {};".format(ip.name))
-        self.cpp("{}({}) = sum(padded({}) * {}({}));".format(
+
+        if bias:
+            bias_expr = "+{}({})".format(bias.name, w_vars[0])
+        else:
+            bias_expr = ""
+        self.cpp("{}({}) = sum(padded({}) * {}({})) {};".format(
             op.name, ','.join(dim_vars[::-1]),
             ','.join(ip_vars[::-1]),
-            w.name, ','.join(w_vars[::-1])))
-        op_shape = [ip.shape[0], w.shape[0]] \
-                   + [floor((ips+pad[0]+pad[1]-ks)/stride+1) \
-                                   for (ips, pad, ks, stride) \
-                                   in zip(ip.shape[2:],
-                                          pads,
-                                          w.shape[2:],
-                                          strides)]
+            w.name, ','.join(w_vars[::-1]),
+            bias_expr))
+
         op.set_shape(op_shape)
         op.set_type(ip.type)
 
     def generate_convT(self, node):
+        print(node)
         ip    = self.funcs[node.input[0]]
         w     = self.funcs[node.input[1]]
+        if len(node.input) > 2:
+            bias = self.funcs[node.input[2]]
+        else:
+            bias = None
         op    = self.funcs[node.output[0]]
         kernel_shape = None
         pads         = None
@@ -1212,10 +1259,15 @@ class HalideBackendRep(BackendRep):
                       for i, s in enumerate(w.shape[2:][::-1])])))
 
         self.cpp()
-        self.cpp("{}({}) = sum({}({}) * padded({}));".format(
+        if bias:
+            bias_expr = "+{}({})".format(bias.name, dim_vars[1])
+        else:
+            bias_expr = ""
+        self.cpp("{}({}) = sum({}({}) * padded({})) {};".format(
             op.name, ','.join(dim_vars[::-1]),
             ip.name, ','.join(ip_vars[::-1]),
-            ','.join(w_vars[::-1])))
+            ','.join(w_vars[::-1]),
+            bias_expr))
 
         op.set_shape(op_shape)
         op.set_type(ip.type)
@@ -1507,8 +1559,6 @@ class HalideBackendRep(BackendRep):
             self.generate_bin_expr(node, "{}|{}", "int8_t")
         elif node.op_type == "Pow":
             self.generate_bin_expr(node, "pow({},{})")
-        elif node.op_type == "PRelu":
-            self.generate_bin_expr(node, "select({0}<0,{0}*{1},{0})")
         elif node.op_type == "Sub":
             self.generate_bin_expr(node, "{}-{}")
         elif node.op_type == "Xor":
@@ -1567,6 +1617,9 @@ class HalideBackendRep(BackendRep):
             self.generate_pad(node)
         elif node.op_type == "DepthToSpace":
             self.generate_dtos(node)
+        elif node.op_type == "PRelu":
+            self.generate_prelu_expr(node)
+            #self.generate_bin_expr(node, "select({0}<0,{0}*{1},{0})")
         elif node.op_type == "Flatten":
             self.generate_flatten(node)
         elif node.op_type == "Gather":
