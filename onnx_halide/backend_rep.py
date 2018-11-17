@@ -211,10 +211,11 @@ class HalideBackendRep(BackendRep):
 
             func_name = "{}_func".format(onnx_name)
             if is_ip:
-                func_strs.append("{} {}({});".format(
+                func_strs.append("{} {}({}{});".format(
                     "Func" if c_shape else "Expr",
                     func_name,
-                    buf_name if c_shape else c_name))
+                    buf_name if c_shape else c_name,
+                    "" if c_shape else "[0]"))
                 self.funcs[tensor.name] = HalideObj(func_name,
                                                     c_shape,
                                                     c_type)
@@ -508,7 +509,7 @@ class HalideBackendRep(BackendRep):
         op.set_shape(ip0.shape)
         dim_vars = self.generate_dim_vars(len(ip0.shape))
         ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in \
-                        zip(ip1.shape, dim_vars)]
+                        zip(ip1.shape[::-1], dim_vars[::-1])][::-1]
         ip0_expr = "{}({})".format(ip0.name,
                                    JOIN_VARS(dim_vars))
         ip1_expr = "{}({})".format(ip1.name,
@@ -937,8 +938,8 @@ class HalideBackendRep(BackendRep):
         self.generate_func("norm_C")
         if transA:
             self.cpp("norm_A({}) = {}({});".format(
-                JOIN_VARS((dim_vars[:2]),
-                A.name, JOIN_VARS(dim_vars[:2][::-1]))))
+                JOIN_VARS(dim_vars[:2]),
+                A.name, JOIN_VARS(dim_vars[:2][::-1])))
         else:
             self.cpp("norm_A = {};".format(A.name))
         if transB:
@@ -948,7 +949,7 @@ class HalideBackendRep(BackendRep):
         else:
             self.cpp("norm_B = {};".format(B.name))
         self.cpp("norm_C({}) = {}({});".format(
-            JOIN_VARS(dim_vars[::-1]),
+            JOIN_VARS(dim_vars),
             C.name, JOIN_VARS([dv if cs > 1 else "0" \
                                for dv, cs in zip(dim_vars[:2],
                                                  C.shape)])))
