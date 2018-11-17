@@ -231,9 +231,14 @@ class HalideBackendRep(BackendRep):
                 c_shape = attr.t.dims
                 c_type  = C_TYPE_DECODER(attr.t.data_type)
                 c_name  = "{}_constant_c".format(onnx_name)
-                c_size  = np.prod(c_shape)
+                c_size  = np.prod(c_shape) if c_shape else 1
 
-                if attr.t.float_data:
+                if attr.t.raw_data:
+                    onnx_data = np.frombuffer(attr.t.raw_data,
+                                              count=int(np.prod(c_shape)),
+                                              dtype=NP_TYPE_DECODER(c_type))
+                    init_data = ','.join(map(str, onnx_data))
+                elif attr.t.float_data:
                     init_data = ','.join(map(str, attr.t.float_data))
                 
                 self.cpp("{} {}[{}] = {{{}}};".format(c_type,
@@ -248,16 +253,21 @@ class HalideBackendRep(BackendRep):
                 self.cpp("Buffer<{0}> {3}({1}, {{{2}}});".format(
                     c_type,
                     c_name,
-                    ', '.join([str(i) for i in c_shape][::-1]),
+                    ', '.join([str(i) for i in c_shape][::-1]) if c_shape else "1",
                     buf_name))
                 self.buffers[tensor_name] = HalideObj(buf_name,
-                                                      c_shape, c_type)
+                                                      c_shape if c_shape else [1], c_type)
 
                 func_name = "{}_func".format(onnx_name, io)
-                func_strs.append("Func {}({});".format(func_name,
-                                                       buf_name))
+                if not c_shape:
+                    func_strs.append("Expr {} = {}[0];".format(func_name,
+                                                            c_name))
+                else:
+                    func_strs.append("Func {}({});".format(func_name,
+                                                           buf_name))
                 self.funcs[tensor_name] = HalideObj(func_name,
-                                                    c_shape, c_type)
+                                                    c_shape,
+                                                    c_type)
 
 
         # Generate the Halide compute function
@@ -756,7 +766,6 @@ class HalideBackendRep(BackendRep):
         op.set_type(ip0.type)
 
     def generate_gather(self, node):
-        print(node)
         ip  = self.funcs[node.input[0]]
         ids = self.funcs[node.input[1]]
         op  = self.funcs[node.output[0]]
@@ -769,11 +778,12 @@ class HalideBackendRep(BackendRep):
         op.set_shape(op_shape)
         op.set_type(ip.type)
         dim_vars = self.generate_dim_vars(len(op_shape))
+        id_vars = dim_vars[axis:axis+len(ids.shape)]
         ip_vars = dim_vars[:axis] \
                   + ["clamp(cast<int>({}({})), 0, {})".format(ids.name,
-                                                              JOIN_VARS(dim_vars[:len(ip.shape)]),
+                                                              JOIN_VARS(id_vars),
                                                               ip.shape[axis]-1)] \
-                  + dim_vars[len(ip.shape):]
+                  + dim_vars[len(ids.shape)+axis:]
         self.cpp("{}({}) = {}({});".format(
             op.name, JOIN_VARS(dim_vars),
             ip.name, JOIN_VARS(ip_vars)))
@@ -1118,6 +1128,8 @@ class HalideBackendRep(BackendRep):
                 group = attr.i
         if not kernel_shape:
             kernel_shape = w.shape[2:]
+        if not dilations:
+            dilations = [1] * len(kernel_shape)
         if not pads:
             pads = [(0, 0) for k in kernel_shape]
         if not strides:
@@ -1619,7 +1631,6 @@ class HalideBackendRep(BackendRep):
             self.generate_dtos(node)
         elif node.op_type == "PRelu":
             self.generate_prelu_expr(node)
-            #self.generate_bin_expr(node, "select({0}<0,{0}*{1},{0})")
         elif node.op_type == "Flatten":
             self.generate_flatten(node)
         elif node.op_type == "Gather":
