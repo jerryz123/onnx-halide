@@ -154,6 +154,7 @@ class HalideBackendRep(BackendRep):
 
 
     def generate_csrc(self, model):
+
         self.cpp("#include \"Halide.h\"")
         self.cpp("#include <stdint.h>")
         self.cpp("#include <cfloat>")
@@ -164,7 +165,7 @@ class HalideBackendRep(BackendRep):
         self.arrays  = {}
         self.buffers = {}
         self.funcs   = {}
-        init_data = {}
+        self.init_data = {}
 
         # Find initial values
         for init in model.graph.initializer:
@@ -174,7 +175,8 @@ class HalideBackendRep(BackendRep):
                                           count=np.prod(dims),
                                           dtype=NP_TYPE_DECODER(C_TYPE_DECODER(init.data_type)))
             c_arr = ", ".join([str(i) for i in onnx_data])
-            init_data[init.name] = c_arr
+            c_arr_raw = onnx_data
+            self.init_data[init.name] = (c_arr, c_arr_raw)
 
         # Create arrays for input buffers, assign these with initial values
         func_strs   = []
@@ -193,8 +195,8 @@ class HalideBackendRep(BackendRep):
             c_size  = np.prod(c_shape) if c_shape else 1
             c_str   = "{} {}".format(c_type, c_name)
             c_str += "[{}]".format(c_size)
-            if tensor.name in init_data:
-                c_str += " = {{{}}}".format(init_data[tensor.name])
+            if tensor.name in self.init_data:
+                c_str += " = {{{}}}".format(self.init_data[tensor.name][0])
             c_str += ";"
             self.cpp(c_str)
             self.arrays[tensor.name] = HalideObj(c_name, c_shape, c_type)
@@ -298,8 +300,8 @@ class HalideBackendRep(BackendRep):
             if not (func.shape == buf.shape and func.type == buf.type):
                 print("{}{} != {}{}".format(func.type, func.shape,
                                             buf.type, buf.shape))
-                print(self.halide_str)
-                print(model)
+                with open("halonet.cc", "w") as f:
+                    f.write(self.halide_str)
                 exit(1)
 
         # for out_str in output_strs:
@@ -315,7 +317,7 @@ class HalideBackendRep(BackendRep):
                            stderr=subprocess.PIPE)
         llvm_flags = r.stdout.decode().replace('\n', ' ')
 
-        cmd  = "g++ -g -fPIC -xc++ -ldl -lpthread -lz -lterminfo "
+        cmd  = "g++ -g -fPIC -xc++ -ldl -lpthread -lz -lterminfo -fno-finite-math-only "
         cmd += "-c halonet.cc -o halonet.o "
         cmd += "{} -Wno-pedantic ".format(llvm_flags)
         cmd += "-lHalide -I{0}/include -L{0}/lib ".format(HALIDE_DIR)
@@ -404,6 +406,9 @@ class HalideBackendRep(BackendRep):
     def generate_unary_expr(self, node, expr):
         ip      = self.funcs[node.input[0]]
         op      = self.funcs[node.output[0]]
+        op1     = None
+        if len(node.output) > 1:
+            op1 = self.funcs[node.output[1]]
         op_type = ip.type
         min_v   = MIN_TYPE_DECODER(op_type)
         max_v   = MAX_TYPE_DECODER(op_type)
@@ -460,6 +465,11 @@ class HalideBackendRep(BackendRep):
         self.cpp("{}({}) = {};".format(
             op.name, ','.join(dim_vars[::-1]),
             expr))
+        if op1:
+            self.cpp("{}({}) = 1.;".format(
+                op1.name, JOIN_VARS(dim_vars)))
+            op1.set_shape(ip.shape)
+            op1.set_type(ip.type)
         op.set_shape(ip.shape)
         op.set_type(op_type)
 
@@ -564,6 +574,37 @@ class HalideBackendRep(BackendRep):
              for i in range(1, dims+1)][::-1])
         op.set_type(op_type)
 
+    def generate_reshape(self, node):
+        ip = self.funcs[node.input[0]]
+        op = self.funcs[node.output[0]]
+        shape = node.input[1]
+        if shape not in self.init_data:
+            print("Reshapes must be known at compile time")
+            with open("halonet.cc", "w") as f:
+                f.write(self.halide_str)
+            exit(1)
+        shape = tuple(self.init_data[shape][1])
+        op.set_shape(shape)
+        op.set_type(ip.type)
+        dim_vars = self.generate_dim_vars(len(op.shape))
+
+        prevs = ip.shape[1:] + [1]
+        prods = [np.prod(prevs[i:]) for i in range(len(prevs))]
+        ip_vars = ["cast<int>(floor({}/{}))%{}".format(dim_vars[0],
+                                                       prod,
+                                                       ips) for ips, prod in \
+                   zip(ip.shape, prods)]
+        
+        self.generate_func("flattened")
+        self.cpp("flattened({}) = {}({});".format(
+            JOIN_VARS(dim_vars[0]),
+            ip.name, JOIN_VARS(ip_vars)))
+        prevs = op.shape[1:] + [1]
+        prods = [np.prod(prevs[i:]) for i in range(len(prevs))]
+        fl_vars = ["({}*{})".format(dv, p) for dv, p in zip(dim_vars, prods)]
+        self.cpp("{}({}) = flattened({});".format(
+            op.name, JOIN_VARS(dim_vars),
+            '+'.join(fl_vars[::-1])))
     def generate_flatten(self, node):
         ip = self.funcs[node.input[0]]
         op = self.funcs[node.output[0]]
@@ -1516,6 +1557,7 @@ class HalideBackendRep(BackendRep):
         return
 
     def generate_node(self, nidx, node):
+        print(node.op_type)
         if node.op_type == "Constant":
             return
         for op in node.output:
@@ -1602,7 +1644,7 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "Or":
             self.generate_bin_expr(node, "{}|{}", "int8_t")
         elif node.op_type == "Pow":
-            self.generate_bin_expr(node, "pow({},{})")
+            self.generate_bin_expr(node, "pow({0},{1})")
         elif node.op_type == "Sub":
             self.generate_bin_expr(node, "{}-{}")
         elif node.op_type == "Xor":
@@ -1694,13 +1736,13 @@ class HalideBackendRep(BackendRep):
         elif node.op_type == "Unsqueeze":
             self.generate_unsqueeze(node)
         elif node.op_type == "Upsample":
-            raise NotImplementedException
+            raise NotImplementedError
         elif node.op_type == "TopK":
             raise NotImplementedError
         elif node.op_type == "Tile":
             raise NotImplementedError
         elif node.op_type == "Reshape":
-            raise NotImplementedError
+            self.generate_reshape(node)
         elif node.op_type == "GRU":
             raise NotImplementedError
         elif node.op_type == "RNN":
@@ -1710,7 +1752,6 @@ class HalideBackendRep(BackendRep):
         else:
             print()
             print("unhandled node ", node.op_type)
-            print(node)
             raise NotImplementedError
         self.cpp("}", -1)
 
@@ -1718,9 +1759,11 @@ class HalideBackendRep(BackendRep):
             try:
                 self.cpp("// {} {}{}".format(op, self.funcs[op].type,
                                               self.funcs[op].shape))
-                self.funcs[op].type
             except:
                 print(node)
-                print(self.halide_str)
+                with open("halonet.cc", "w") as f:
+                    f.write(self.halide_str)
+                assert(False)
+                #print(self.halide_str)
 
         #self.cpp("{}.realize();".format(node.output[0]))
