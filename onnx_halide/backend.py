@@ -37,7 +37,7 @@ class HalideBackend(Backend):
     @classmethod
     def run_model(cls, model, input, device='CPU'):
         rep = HalideBackendRep(model)
-        raise NotImplementedError
+        return rep.run(input)
 
     @classmethod
     def prepare(cls, model, device='CPU', **kwargs):

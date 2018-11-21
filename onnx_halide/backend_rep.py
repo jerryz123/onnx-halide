@@ -135,19 +135,20 @@ class HalideBackendRep(BackendRep):
     def run(self, inputs, **kwargs):
         print()
         for ip, ip_ptr in zip(inputs, self.in_pointers):
-            print(ip)
+            print(repr(ip))
             print()
             ctypes.memmove(ip_ptr, ip.ctypes.data, ip.nbytes)
         self.halide_fn()
         ops = []
+
         for op_name, op_ptr in self.out_pointers:
             op = np.zeros(shape=self.buffers[op_name].shape,
                           dtype=NP_TYPE_DECODER(
                               self.buffers[op_name].type))
             ctypes.memmove(op.ctypes.data, op_ptr, op.nbytes)
             ops.append(op)
-            print(op)
-
+            print(repr(op))
+            print()
         return ops
 
 
@@ -261,8 +262,9 @@ class HalideBackendRep(BackendRep):
 
                 func_name = "{}_func".format(onnx_name, io)
                 if not c_shape:
-                    func_strs.append("Expr {} = {}[0];".format(func_name,
-                                                            c_name))
+                    func_strs.append("Expr {} = Expr({}[0]);".format(
+                        func_name,
+                        c_name))
                 else:
                     func_strs.append("Func {}({});".format(func_name,
                                                            buf_name))
@@ -282,6 +284,7 @@ class HalideBackendRep(BackendRep):
 
         # Generate Funcs for operator nodes
         for nidx, node in enumerate(model.graph.node):
+            self.cpp()
             self.generate_node(nidx, node)
         self.cpp()
         # Realize the output funcs into output buffers
@@ -289,7 +292,9 @@ class HalideBackendRep(BackendRep):
             func = self.funcs[tensor.name]
             buf  = self.buffers[tensor.name]
 
-            self.cpp("{}.realize({});".format(func.name, buf.name))
+            self.cpp("{}.realize({});".format(func.name,
+                                              buf.name))
+            self.cpp("{0}.compile_to_lowered_stmt(\"{0}.html\", {{}}, HTML);".format(func.name))
             if not (func.shape == buf.shape and func.type == buf.type):
                 print("{}{} != {}{}".format(func.type, func.shape,
                                             buf.type, buf.shape))
@@ -356,10 +361,10 @@ class HalideBackendRep(BackendRep):
 
 
     def generate_var(self, var):
-        self.cpp("Var {0}(\"{0}\");".format(var))
+        self.cpp("Var {0};".format(var))
 
     def generate_func(self, fname):
-        self.cpp("Func {0}(\"{0}\");".format(fname))
+        self.cpp("Func {0};".format(fname))
 
     def generate_dim_vars(self, n_vars):
         dim_vars = ["d_{}".format(i) for i in range(n_vars)]
@@ -575,7 +580,6 @@ class HalideBackendRep(BackendRep):
             ip_vars = ["cast<int>(floor({}/{}))%{}".format(dim_vars[1], prod, ips) for ips, prod in zip(
                 ip.shape,
                 prods)]
-            print(ip_vars)
         else:
             op_shape = [np.prod(ip.shape[:axis])] + [np.prod(ip.shape[axis:])]
             pprevs = ip.shape[axis:] + [1]
@@ -620,7 +624,6 @@ class HalideBackendRep(BackendRep):
             zd_vars = list(zip([i for i in range(len(ip.shape)) if i not in axes], [dv for i, dv in enumerate(dim_vars) if i not in axes]))
         else:
             zd_vars = list(zip([i for i in range(len(ip.shape)) if i not in axes], dim_vars))
-        print(zd_vars)
         ip_vars = [None] * len(ip.shape)
         for i, rv in red_vars:
             ip_vars[i] = rv
@@ -939,7 +942,8 @@ class HalideBackendRep(BackendRep):
         if transA:
             self.cpp("norm_A({}) = {}({});".format(
                 JOIN_VARS(dim_vars[:2]),
-                A.name, JOIN_VARS(dim_vars[:2][::-1])))
+                A.name,
+                JOIN_VARS(dim_vars[:2][::-1])))
         else:
             self.cpp("norm_A = {};".format(A.name))
         if transB:
@@ -950,9 +954,11 @@ class HalideBackendRep(BackendRep):
             self.cpp("norm_B = {};".format(B.name))
         self.cpp("norm_C({}) = {}({});".format(
             JOIN_VARS(dim_vars),
-            C.name, JOIN_VARS([dv if cs > 1 else "0" \
-                               for dv, cs in zip(dim_vars[:2],
-                                                 C.shape)])))
+            C.name,
+            JOIN_VARS([dv if cs > 1 else "0" \
+                       for dv, cs \
+                       in zip(dim_vars[::-1],
+                              C.shape[::-1])][::-1])))
 
         self.cpp("{}({}) = {}*norm_C({})+{}*sum(norm_A({})*norm_B({}));".format(
             Y.name, JOIN_VARS(dim_vars),
@@ -1183,7 +1189,6 @@ class HalideBackendRep(BackendRep):
         op.set_type(ip.type)
 
     def generate_convT(self, node):
-        print(node)
         ip    = self.funcs[node.input[0]]
         w     = self.funcs[node.input[1]]
         if len(node.input) > 2:
@@ -1192,6 +1197,7 @@ class HalideBackendRep(BackendRep):
             bias = None
         op    = self.funcs[node.output[0]]
         kernel_shape = None
+        dilations    = None
         pads         = None
         strides      = None
         op_shape     = None
@@ -1212,26 +1218,21 @@ class HalideBackendRep(BackendRep):
                 op_pads = list(attr.ints)
         if not strides:
             strides = [1 for i in w.shape[2:]]
+        if not dilations:
+            dilations = [1 for i in w.shape[2:]]
         if not kernel_shape:
             kernel_shape = w.shape[2:]
         if not pads:
             pads = [(0, 0) for w in kernel_shape]
         if not op_pads:
             op_pads = [0 for j in kernel_shape]
-        if not op_shape and op_pads:
-            op_shape = [stride*(ips-1)+op_pad+ks-pad[0]-pad[1] \
-                        for (ips, op_pad, ks, stride, pad) in
-                        zip(ip.shape[2:],
-                            op_pads,
-                            kernel_shape,
-                            strides,
-                            pads)]
-        if op_shape:
-            op_shape = op_shape[-len(kernel_shape):]
+        if op_shape: # Output shape explicit
+            if len(op_shape) < len(ip.shape):
+                op_shape = [ip.shape[0], w.shape[1]] + op_shape
             total_padding = [stride*(ops-1)+op_pad+ks-ips \
                              for (ips, ops, op_pad, ks, stride) in \
                              zip(ip.shape[2:],
-                                 op_shape,
+                                 op_shape[2:],
                                  op_pads,
                                  kernel_shape,
                                  strides)]
@@ -1240,48 +1241,78 @@ class HalideBackendRep(BackendRep):
                     pads = [(tp//2, tp-tp//2) for tp in total_padding]
                 else:
                     pads = [(tp-tp//2, tp//2) for tp in total_padding]
-        if not op_shape:
-            op_shape = [ip.shape[0], w.shape[1]] \
-                   + [stride*(ips-1)+op_pad+ks-pad[0]-pad[1]#floor((ips+pad[0]+pad[1]-ks)/stride+1) \
-                      for (ips, pad, ks, stride, op_pad) \
-                      in zip(ip.shape[2:],
-                             pads,
-                             w.shape[2:],
-                             strides,
-                             op_pads
-                      )]
-        op_shape = [ip.shape[0], w.shape[1]] + op_shape
+        else: # Infer output shape 
+            op_shape = [ip.shape[0], w.shape[1]] + \
+                       [stride*(ips-1)+op_pad+ks-pad[0]-pad[1] \
+                        for (ips, op_pad, ks, stride, pad) in
+                        zip(ip.shape[2:],
+                            op_pads,
+                            kernel_shape,
+                            strides,
+                            pads)]
+
         dim_vars = self.generate_dim_vars(len(ip.shape))
         self.cpp("RDom r({{{}}}, \"r\");".format(
             ','.join(["{{0,{}}}".format(i) \
-                      for i in ip.shape[1:]])))
+                      for i, st in zip(ip.shape[1:],
+                                   [1] + strides)])))
         red_vars= ["r[{}]".format(i) for i in range(len(kernel_shape) + 1)]
 
-        ip_vars = [dim_vars[0]] + red_vars
-        w_vars = [dim_vars[0]] + [red_vars[0]] + \
-                 ["-{}*{}+{}+{}".format(rv, stride, dv, pad[0]) for \
-                  dv, rv, pad, stride in \
-                  zip(dim_vars[2:],
-                      red_vars[1:],
-                      pads,
-                      strides)]
-        self.cpp()
         self.cpp("Func padded = BoundaryConditions::constant_exterior({}, 0, {{{}, {{Expr(), Expr()}}, {{Expr(), Expr()}}, }});".format(
             w.name,
             ','.join(["{{0,{}}}".format(s) \
                       for i, s in enumerate(w.shape[2:][::-1])])))
-
+        self.cpp("Func padded_ip = BoundaryConditions::constant_exterior({}, 0, {{{}, {{Expr(),Expr()}},{{Expr(),Expr()}},}});".format(
+            ip.name,
+            JOIN_VARS(["{{0,{}}}".format(s) for s in ip.shape[2:]])))
+        dilated_op_vars = dim_vars
+        dilated_expr = ["(({}%{})==0)".format(dv, dil) \
+                        for dil, dv in zip(dilations, dim_vars[2:])]
+        dilated_ip_vars = ["cast<int>(floor({}/{}))".format(dv, dil) \
+                           for dil, dv in zip(dilations, dim_vars[2:])]
+        self.generate_func("dilated");
+        self.cpp("dilated({}) = select({}, padded({}), 0);".format(
+            JOIN_VARS(dilated_op_vars),
+            "&&".join(dilated_expr[::-1]),
+            JOIN_VARS(dim_vars[:2] + dilated_ip_vars)))
         self.cpp()
+
+        ip_vars = [dim_vars[0]] + [red_vars[0]] + \
+                  ["cast<int>(floor(({0}-{4}*{5}+{2})/{1}))".format(dv, st, pad[0], op_pad, rv, dil) for dv, st, pad, op_pad, rv, dil \
+                   in zip(dim_vars[2:],
+                          strides,
+                          pads,
+                          op_pads,
+                          red_vars[1:],
+                          dilations)]
+        w_vars = [red_vars[0]] + [dim_vars[1]] + \
+                 ["{}*{}".format(rv, dil) for \
+                  dv, rv, pad, dil, stride in \
+                  zip(dim_vars[2:],
+                      red_vars[1:],
+                      pads,
+                      dilations,
+                      strides)]
+        sel_expr = ["((({0}-{2}*{3}+{5})%{1})==0)".format(dv, st, rv, dil, op_pad, pad[0]) for \
+                    dv, rv, st, dil, op_pad, pad in \
+                    zip(dim_vars[2:],
+                        red_vars[1:],
+                        strides,
+                        dilations,
+                        op_pads,
+                        pads)]
+        self.cpp()
+
         if bias:
             bias_expr = "+{}({})".format(bias.name, dim_vars[1])
         else:
             bias_expr = ""
-        self.cpp("{}({}) = sum({}({}) * padded({})) {};".format(
-            op.name, ','.join(dim_vars[::-1]),
-            ip.name, ','.join(ip_vars[::-1]),
-            ','.join(w_vars[::-1]),
+        self.cpp("{0}({1}) = sum(select({2}, {3}({4}), 0) * dilated({5})) {6};".format(
+            op.name, JOIN_VARS(dim_vars),
+            "&&".join(sel_expr[::-1]),
+            "padded_ip", JOIN_VARS(ip_vars),
+            JOIN_VARS(w_vars),
             bias_expr))
-
         op.set_shape(op_shape)
         op.set_type(ip.type)
 
