@@ -77,7 +77,8 @@ class OnnxAttrs:
 class HalideObj:
     def __init__(self, name=None, shape=-1, type=None, io=0):
         self._name = name
-        self._shape = tuple(shape)
+        self._shape = -1 if shape == -1 else \
+                      tuple([int(i) for i in shape])
         self._type = type
         self._io = io
     @property
@@ -89,6 +90,10 @@ class HalideObj:
         assert(self._shape != -1)
         return list(self._shape)
     @property
+    def is_scalar(self):
+        assert(self._shape != -1)
+        return self._shape == ()
+    @property
     def type(self):
         assert(self._type)
         return self._type
@@ -96,7 +101,12 @@ class HalideObj:
     def is_input(self):
         assert(self._io != 0)
         return self._io == 1
+    @property
+    def is_output(self):
+        assert(self._io != 0)
+        return self._io == -1
     def set_shape(self, shape):
+        assert(all([type(i) == int for i in shape]))
         assert(self._shape == -1 or self._shape == tuple(shape))
         self._shape = tuple(shape)
     def set_type(self, type):
@@ -106,7 +116,9 @@ class HalideObj:
         return "({}, {}, {}, {})".format(self._name,
                                          self._shape,
                                          self._type,
-                                         self._io)
+                                         {1:"INPUT",
+                                          0:"NODE",
+                                          -1:"OUTPUT"}[self._io])
 
 def is_loaded(lib):
     libp = os.path.abspath(lib)
@@ -127,7 +139,7 @@ class HalideBackendRep(BackendRep):
         self.generate_csrc(model)
     def __del__(self):
         try:
-            os.remove("lib{}.so".format(self.model_name))
+            os.remove("generated/lib{}.so".format(self.model_name))
         except FileNotFoundError:
             pass
     
@@ -144,14 +156,23 @@ class HalideBackendRep(BackendRep):
         i = 0
         args = []
         outputs = []
-        for name in self.c_args:
+        for name, ctype in zip(self.c_args, self.halide_fn.argtypes):
             func = self.funcs[name]
-            ctype = ctypes.POINTER(CTYPE_TYPE_DECODER(func.type))
             if func.is_input:
-                args.append(inputs[i].ctypes.data_as(ctype))
+                if i >= len(inputs):
+                    input = self.init_data[name]
+                else:
+                    input = inputs[i]
+                if func.is_scalar:
+                    args.append(ctype(input))
+                else:
+                    args.append(input.ctypes.data_as(ctype))
                 i += 1
             else:
-                op = np.zeros(func.shape, dtype=NP_TYPE_DECODER(func.type))
+                if func.is_scalar:
+                    op = np.zeros(1, dtype=NP_TYPE_DECODER(func.type))
+                else:
+                    op = np.zeros(func.shape, dtype=NP_TYPE_DECODER(func.type))
                 args.append(op.ctypes.data_as(ctype))
                 outputs.append(op)
         self.halide_fn(*args)
@@ -160,7 +181,6 @@ class HalideBackendRep(BackendRep):
 
 
     def generate_csrc(self, model):
-
         self.cpp("#include \"Halide.h\"")
         self.cpp("#include <stdint.h>")
         self.cpp("#include <cfloat>")
@@ -177,31 +197,36 @@ class HalideBackendRep(BackendRep):
                 onnx_data = np.frombuffer(init.raw_data,
                                           count=np.prod(dims),
                                           dtype=NP_TYPE_DECODER(C_TYPE_DECODER(init.data_type)))
-            c_arr = ", ".join([str(i) for i in onnx_data])
-            c_arr_raw = onnx_data
-            self.init_data[init.name] = (c_arr, c_arr_raw)
+            self.init_data[init.name] = onnx_data
 
-
+        self.cpp("using namespace Halide;")
         self.cpp("namespace {")
 
-        self.cpp("class HalOGen : public Halide::Generator<HalOGen> {", 1)
+        self.cpp("class HalOGen : public Generator<HalOGen> {", 1)
         self.cpp("public:", 1)
         # Create arrays for input buffers
         
         for tensor, is_output in list(map(lambda x:(x,0), model.graph.input)) \
                                + list(map(lambda x:(x,1), model.graph.output)):
-            onnx_name = "f_" + tensor.name.replace('/', '')
+            onnx_name = "f_" + tensor.name.replace('/','').replace('-','')
             c_shape = [d.dim_value for d \
                        in tensor.type.tensor_type.shape.dim]
             c_type  = C_TYPE_DECODER(tensor.type.tensor_type.elem_type)
-            self.cpp("{4}<Buffer<{0}>> {1}{{\"{1}\", {2}}}; //{0}{3}".format(
-                c_type,
-                onnx_name,
-                len(c_shape),
-                c_shape,
-                "Output" if is_output else "Input "))
+            is_scalar = len(c_shape) == 0
+            if is_scalar:
+                self.cpp("{2}<{0}> {1}{{\"{1}\"}};".format(
+                    c_type,
+                    onnx_name,
+                    "Output" if is_output else "Input "))
+            else:
+                self.cpp("{4}<Buffer<{0}>> {1}{{\"{1}\", {2}}}; //{0}{3}".format(
+                    c_type,
+                    onnx_name,
+                    len(c_shape),
+                    c_shape,
+                    "Output" if is_output else "Input "))
             self.funcs[tensor.name] = HalideObj(onnx_name,
-                                                c_shape,
+                                                tuple(c_shape),
                                                 c_type,
                                                 -1 if is_output else 1)
             self.c_args.append(tensor.name)
@@ -218,61 +243,6 @@ class HalideBackendRep(BackendRep):
         self.cpp("};", -1)
         self.cpp("", -1)
         self.cpp("};")
-
-        func_strs = []
-
-
-
-        # # Create arrays for constant nodes
-        # self.cpp()
-        # for cnode in model.graph.node:
-        #     if cnode.op_type == "Constant":
-        #         tensor_name = cnode.output[0]
-        #         attr = cnode.attribute[0]
-        #         onnx_name = "_" + tensor_name.replace('/', '')
-
-        #         c_shape = attr.t.dims
-        #         c_type  = C_TYPE_DECODER(attr.t.data_type)
-        #         c_name  = "{}_constant_c".format(onnx_name)
-        #         c_size  = np.prod(c_shape) if c_shape else 1
-
-        #         if attr.t.raw_data:
-        #             onnx_data = np.frombuffer(attr.t.raw_data,
-        #                                       count=int(np.prod(c_shape)),
-        #                                       dtype=NP_TYPE_DECODER(c_type))
-        #             init_data = ','.join(map(str, onnx_data))
-        #         elif attr.t.float_data:
-        #             init_data = ','.join(map(str, attr.t.float_data))
-                
-        #         self.cpp("{} {}[{}] = {{{}}};".format(c_type,
-        #                                               c_name,
-        #                                               c_size,
-        #                                               init_data))
-        #         self.arrays[tensor_name] = HalideObj(c_name,
-        #                                              c_shape,
-        #                                              c_type)
-
-        #         buf_name = "{}_constant_buf".format(onnx_name)
-        #         self.cpp("Buffer<{0}> {3}({1}, {{{2}}});".format(
-        #             c_type,
-        #             c_name,
-        #             ', '.join([str(i) for i in c_shape][::-1]) if c_shape else "1",
-        #             buf_name))
-        #         self.buffers[tensor_name] = HalideObj(buf_name,
-        #                                               c_shape if c_shape else [1], c_type)
-
-        #         func_name = "{}_func".format(onnx_name, io)
-        #         if not c_shape:
-        #             func_strs.append("Expr {} = Expr({}[0]);".format(
-        #                 func_name,
-        #                 c_name))
-        #         else:
-        #             func_strs.append("Func {}({});".format(func_name,
-        #                                                    buf_name))
-        #         self.funcs[tensor_name] = HalideObj(func_name,
-        #                                             c_shape,
-        #                                             c_type)
-
         self.cpp("}", -1)
         self.cpp("HALIDE_REGISTER_GENERATOR(HalOGen, halogen)")
 
@@ -280,27 +250,41 @@ class HalideBackendRep(BackendRep):
         with open("generated/halogen_generator.cpp", 'w') as f:
             f.write(self.halogen_str)
 
-        # Generate Python shim to Halide generated code
+        # Generate C shim to Halide generated code
         self.halogen_str = """"""
         self.cpp("#include \"Halide.h\"")
         self.cpp("#include \"halogen.h\"")
+        self.cpp("using float16_t = Halide::float16_t;")
         self.cpp("using namespace Halide::Runtime;")
         self.cpp("extern \"C\" {", 1)
         py_args      = []
         buffers      = []
         ha_args      = []
+        output_s     = []
         for name in self.c_args:
             fn = self.funcs[name]
-            py_args.append("{0}* {1}".format(fn.type, fn.name))
-            buffers.append("Buffer<{0}> {1}_buf({1}, {{{2}}});".format(
+            py_args.append("{0}{2} {1}".format(
                 fn.type,
                 fn.name,
-                JOIN_VARS([str(i) for i in fn.shape])))
-            ha_args.append("{}_buf".format(fn.name))
+                "" if fn.is_scalar and fn.is_input else "*"))
+            if not fn.is_scalar:
+                buffers.append("Buffer<{0}> {1}_buf({1}, {{{2}}});".format(
+                    fn.type,
+                    fn.name,
+                    JOIN_VARS([str(i) for i in fn.shape])))
+            elif fn.is_scalar and fn.is_output:
+                buffers.append("Buffer<{0}> {1}_buf = Buffer<{0}>::make_scalar();".format(
+                    fn.type, fn.name))
+                output_s.append("{0}[0] = {0}_buf();".format(fn.name))
+            ha_args.append("{}{}".format(fn.name,
+                                         "" if fn.is_scalar and fn.is_input else "_buf"))
         self.cpp("int halogen_c({}) {{".format(','.join(py_args)), 1)
         for buf in buffers:
             self.cpp(buf)
-        self.cpp("return halogen({});".format(','.join(ha_args)))
+        self.cpp("int r = halogen({});".format(','.join(ha_args)))
+        for op in output_s:
+            self.cpp(op)
+        self.cpp("return r;")
         self.cpp("}", -1)
         self.cpp("}", -1)
         with open("generated/halogen_c.cpp", 'w') as f:
@@ -313,7 +297,7 @@ class HalideBackendRep(BackendRep):
         r = subprocess.run(cmd, shell=True)
 
         cmd  = "generated/halogen.generator -g halogen -o generated -e "
-        cmd += "assembly,bitcode,cpp,h,html,o,static_library,stmt,cpp_stub,schedule "
+        cmd += "assembly,bitcode,h,html,o,static_library,stmt,schedule "
         cmd += "target=host"
         r = subprocess.run(cmd, shell=True)
 
@@ -329,28 +313,11 @@ class HalideBackendRep(BackendRep):
             self.model_name))
         self.halide_fn = self.halolib.halogen_c
         argtypes = [ctypes.POINTER(CTYPE_TYPE_DECODER(self.funcs[name].type)) \
-                                   if self.funcs[name].shape \
-                                   else self.funcs[name].type \
-                                   for name in self.c_args]
+                    if not (self.funcs[name].is_scalar and self.funcs[name].is_input) \
+                    else CTYPE_TYPE_DECODER(self.funcs[name].type) \
+                    for name in self.c_args]
         self.halide_fn.argtypes = argtypes
-        # self.in_pointers = []
-        # for ip in model.graph.input:
-        #     ctype_type = CTYPE_TYPE_DECODER(self.arrays[ip.name].type)
-        #     ip_ptr = ctypes.pointer(ctype_type.in_dll(
-        #         self.halolib,
-        #         self.arrays[ip.name].name))
-        #     self.in_pointers.append(ip_ptr)
-
-        # self.out_pointers = []
-        # for op in model.graph.output:
-        #     ctype_type = CTYPE_TYPE_DECODER(self.arrays[op.name].type)
-        #     op_ptr = ctypes.pointer(ctype_type.in_dll(
-        #         self.halolib,
-        #         self.arrays[op.name].name))
-        #     self.out_pointers.append((op.name, op_ptr))
-
-        # self.halide_fn = self.halolib.halide_compute
-
+ 
 
     def generate_var(self, var):
         self.cpp("Var {0};".format(var))
@@ -374,7 +341,7 @@ class HalideBackendRep(BackendRep):
         op = self.funcs[node.output[0]]
         op.set_shape([len(ip.shape)])
         op.set_type("int64_t")
-        self.cpp("int64_t shape_c[{}] = {{{}}};".format(
+        self.cpp("int64_t* shape_c = new int64_t[{0}] {{{1}}};".format(
             len(ip.shape),
             ','.join(map(str, ip.shape))))
         self.cpp("Buffer<int64_t> shape_buf(shape_c, {{{}}});".format(len(ip.shape)))
@@ -386,13 +353,40 @@ class HalideBackendRep(BackendRep):
     def generate_size(self, node):
         ip = self.funcs[node.input[0]]
         op = self.funcs[node.output[0]]
-        op.set_shape([1])
+        op.set_shape(())
         op.set_type("int64_t")
-        dim_var = self.generate_dim_vars(1)[0]
-        self.cpp("{}({}) = cast<int64_t>(Expr({}));".format(
-            op.name, dim_var, int(np.prod(ip.shape))))
+        self.cpp("{}() = cast<int64_t>(Expr({}));".format(
+            op.name, int(np.prod(ip.shape))))
             
+    def generate_constant(self, node):
+        op = self.funcs[node.output[0]]
+        tensor    = node.attribute[0].t
+        op.set_shape(tuple(tensor.dims))
+        op.set_type(C_TYPE_DECODER(tensor.data_type))
 
+        if tensor.raw_data:
+            const_data = np.frombuffer(
+                tensor.raw_data,
+                count=int(np.prod(op.shape)),
+                dtype=NP_TYPE_DECODER(op.type))
+        else:
+            const_data = tensor.float_data
+        if op.is_scalar:
+            self.cpp("{}() = Expr({});".format(op.name, const_data[0]))
+        else:
+            self.cpp("{0}* const_a = new {0}[{1}] {{{2}}};".format(
+                op.type,
+                np.prod(op.shape),
+                ','.join(map(str,const_data))))
+            self.cpp("Buffer<{}> const_b(const_a, {{{}}});".format(
+                op.type,
+                JOIN_VARS([str(i) for i in op.shape])))
+            dim_vars = self.generate_dim_vars(len(op.shape))
+            self.cpp("{}({}) = const_b({});".format(
+                op.name,
+                JOIN_VARS(dim_vars),
+                JOIN_VARS(dim_vars),
+                JOIN_VARS(dim_vars)))
     def generate_unary_expr(self, node, expr):
         ip      = self.funcs[node.input[0]]
         op      = self.funcs[node.output[0]]
@@ -456,7 +450,7 @@ class HalideBackendRep(BackendRep):
             op.name, ','.join(dim_vars[::-1]),
             expr))
         if op1:
-            self.cpp("{}({}) = 1.;".format(
+            self.cpp("{}({}) = Expr(1.);".format(
                 op1.name, JOIN_VARS(dim_vars)))
             op1.set_shape(ip.shape)
             op1.set_type(ip.type)
@@ -534,20 +528,14 @@ class HalideBackendRep(BackendRep):
         ip1_dim = ip1.shape
         dims = max(len(ip0_dim), len(ip1_dim))
         dim_vars = self.generate_dim_vars(dims)
-        if ip0.shape:
-            ip0_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
-                            zip(ip0_dim, dim_vars[-len(ip0_dim):])]
-            ip0_expr = "{}({})".format(ip0.name, JOIN_VARS(ip0_dim_vars))
-        else:
-            ip0_expr = ip0.name
-            ip0_dim = (1,)
-        if ip1.shape:
-            ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
-                                zip(ip1_dim, dim_vars[-len(ip1_dim):])]
-            ip1_expr = "{}({})".format(ip1.name, JOIN_VARS(ip1_dim_vars))
-        else:
-            ip1_expr = ip1.name
-            ip1_dim = (1,)
+        ip0_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
+                        zip(ip0_dim, dim_vars[-len(ip0_dim):])]
+        ip0_expr = "{}({})".format(ip0.name, JOIN_VARS(ip0_dim_vars))
+
+        ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
+                        zip(ip1_dim, dim_vars[-len(ip1_dim):])]
+        ip1_expr = "{}({})".format(ip1.name, JOIN_VARS(ip1_dim_vars))
+
 
         expr = expr.format(ip0_expr, ip1_expr)
 
@@ -573,7 +561,7 @@ class HalideBackendRep(BackendRep):
             with open("generated/halogen_generator.cpp", "w") as f:
                 f.write(self.halogen_str)
             exit(1)
-        shape = tuple(self.init_data[shape][1])
+        shape = tuple([int(i) for i in self.init_data[shape]])
         op.set_shape(shape)
         op.set_type(ip.type)
         dim_vars = self.generate_dim_vars(len(op.shape))
@@ -587,7 +575,7 @@ class HalideBackendRep(BackendRep):
         
         self.generate_func("flattened")
         self.cpp("flattened({}) = {}({});".format(
-            JOIN_VARS(dim_vars[0]),
+            dim_vars[0],
             ip.name, JOIN_VARS(ip_vars)))
         prevs = op.shape[1:] + [1]
         prods = [np.prod(prevs[i:]) for i in range(len(prevs))]
@@ -628,7 +616,7 @@ class HalideBackendRep(BackendRep):
             op.name, ','.join(dim_vars[::-1]),
             ip.name, ','.join((ip_vars[::-1]))))
 
-        op.set_shape(op_shape)
+        op.set_shape([int(i) for i in op_shape])
         op.set_type(ip.type)
 
     def generate_redl_expr(self, node, expr):
@@ -833,7 +821,7 @@ class HalideBackendRep(BackendRep):
             if attr.name == "axis":
                 axis = attr.i
         if not split:
-            split = [ip.shape[axis] // len(ops)] * len(ops)
+            split = [int(ip.shape[axis] // len(ops))] * len(ops)
         dim_vars = self.generate_dim_vars(len(ip.shape))
         s_sum = 0
         for op, s in zip(ops, split):
@@ -1547,11 +1535,9 @@ class HalideBackendRep(BackendRep):
         return
 
     def generate_node(self, nidx, node):
-        if node.op_type == "Constant":
-            return
         for op in node.output:
             if op not in self.funcs:
-                f_name = "_" + op.replace('/', '') + "_func"
+                f_name = "f_" + op.replace('/', '').replace('-','')
                 self.generate_func(f_name)
                 self.funcs[op] = HalideObj(f_name,)
         self.cpp("{{ // {} {} {}".format(node.op_type, nidx, node.name), 1)
@@ -1709,6 +1695,8 @@ class HalideBackendRep(BackendRep):
             self.generate_featuremax(node)
         elif node.op_type == "LRN":
             self.generate_lrn(node)
+        elif node.op_type == "Constant":
+            self.generate_constant(node)
         elif node.op_type == "Shape":
             self.generate_shape(node)
         elif node.op_type == "Size":
