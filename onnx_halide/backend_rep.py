@@ -294,12 +294,12 @@ class HalideBackendRep(BackendRep):
         cmd += "generated/halogen_generator.cpp {0}/tools/GenGen.cpp {0}/lib/libHalide.a "
         cmd += "-o generated/halogen.generator -ldl -lpthread -lz -lrt -ldl -ltinfo -lm"
         cmd = cmd.format(HALIDE_DIR)
-        r = subprocess.run(cmd, shell=True)
+        r = subprocess.run(cmd, check=True, shell=True)
 
         cmd  = "generated/halogen.generator -g halogen -o generated -e "
         cmd += "assembly,bitcode,h,html,o,static_library,stmt,schedule "
         cmd += "target=host"
-        r = subprocess.run(cmd, shell=True)
+        r = subprocess.run(cmd, check=True, shell=True)
 
         cmd  = "g++ -fPIC -shared -std=c++11 "
         cmd += "-I {0}/include/ -I ./generated/ "
@@ -307,7 +307,7 @@ class HalideBackendRep(BackendRep):
         cmd += "{0}/lib/libHalide.a "
         cmd += "-o generated/lib{1}.so -ltinfo"
         cmd  = cmd.format(HALIDE_DIR, self.model_name)
-        r = subprocess.run(cmd, shell=True)
+        r = subprocess.run(cmd, check=True, shell=True)
 
         self.halolib = ctypes.CDLL("generated/lib{}.so".format(
             self.model_name))
