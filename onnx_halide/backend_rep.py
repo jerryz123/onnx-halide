@@ -10,7 +10,10 @@ from math import floor, ceil
 
 
 GLOBAL_LIDX = 1 # Hack to avoid library naming collisions
-HALIDE_DIR = "/home/jerry/Projects/Halide/distrib"
+if "HALIDE_DIR" in os.environ:
+    HALIDE_DIR = os.environ['HALIDE_DIR']
+else:
+    HALIDE_DIR = "/usr/local"
 
 ONNX_TYPE_DECODER = lambda x:{k: v for (v, k) in TensorProto.DataType.items()}[x]
 C_TYPE_DECODER = lambda x: {"FLOAT16": "float16_t",
@@ -163,6 +166,7 @@ class HalideBackendRep(BackendRep):
                     input = self.init_data[name]
                 else:
                     input = inputs[i]
+                assert(tuple(input.shape) == tuple(func.shape))
                 if func.is_scalar:
                     args.append(ctype(input))
                 else:
