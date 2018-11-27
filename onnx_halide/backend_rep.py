@@ -71,6 +71,7 @@ class HalideBackendRep(BackendRep):
                 args.append(op.ctypes.data_as(ctype))
                 outputs.append(op)
         self.halide_fn(*args)
+
         return outputs
 
 
