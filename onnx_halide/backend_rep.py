@@ -7,7 +7,8 @@ import numpy as np
 import importlib
 import os
 from math import floor, ceil
-from .tensortypes import HalogenType
+from .tensortypes import HalogenType, HalideObj
+from .generators import NodeGenerator, CppGenerator
 
 
 GLOBAL_LIDX = 1 # Hack to avoid library naming collisions
@@ -19,78 +20,6 @@ else:
 JOIN_VARS = lambda vars: ','.join(vars[::-1])
 
 CAST = lambda expr, type: "cast<{}>(Expr({}))".format(type, expr)
-class OnnxAttr:
-    def __init__(self, attr, v_fn=lambda x:x, value=None, type="NOTYPE"):
-        self.value = value
-        self.type = type
-        if hasattr(attr, "i"):
-            self.value = attr.i
-        elif hasattr(attr, "f"):
-            self.value = attr.f
-        if hasattr(attr, "type"):
-            self.type = attr.type
-        self.value = v_fn(self.value)
-class OnnxAttrs:
-    def __init__(self, attrs, **kwargs):
-        for k, v in kwargs.items():
-            if v:
-                setattr(self, k, OnnxAttr(None, v[0], v[1]))
-            else:
-                setattr(self, k, None)
-        for attr in attrs:
-            if hasattr(self, attr.name):
-                setattr(self, attr.name, OnnxAttr(attr))
-
-
-class HalideObj:
-    def __init__(self, name=None, shape=-1, type=None, io=0):
-        self._name = name
-        self._shape = -1 if shape == -1 else \
-                      tuple([int(i) for i in shape])
-        self._type = type
-        self._io = io
-    @property
-    def name(self):
-        assert(self._name)
-        return self._name
-    @property
-    def shape(self):
-        assert(self._shape != -1)
-        return list(self._shape)
-    @property
-    def size(self):
-        return int(np.prod(self.shape))
-    @property
-    def is_scalar(self):
-        assert(self._shape != -1)
-        return self._shape == ()
-    @property
-    def type(self):
-        assert(self._type)
-        return self._type
-    @property
-    def is_input(self):
-        assert(self._io != 0)
-        return self._io == 1
-    @property
-    def is_output(self):
-        assert(self._io != 0)
-        return self._io == -1
-    def set_shape(self, shape):
-        assert(all([type(i) == int for i in shape]))
-        assert(self._shape == -1 or self._shape == tuple(shape))
-        self._shape = tuple(shape)
-    def set_type(self, typ):
-        assert(not self._type or self._type == typ)
-        assert(type(typ) == HalogenType)
-        self._type = typ
-    def __repr__(self):
-        return "({}, {}, {}, {})".format(self._name,
-                                         self._shape,
-                                         self._type,
-                                         {1:"INPUT",
-                                          0:"NODE",
-                                          -1:"OUTPUT"}[self._io])
 
 def is_loaded(lib):
     libp = os.path.abspath(lib)
@@ -101,28 +30,21 @@ class HalideBackendRep(BackendRep):
     def __init__(self, model):
         global GLOBAL_LIDX
         self.halogen_str = """"""
-        self.indent = 0
         self.name_map = {}
         self.model_name = "{}_{}_{}_{}".format(model.graph.name,
                                                model.model_version,
                                                model.domain.replace('.', '-'),
                                                GLOBAL_LIDX)
         GLOBAL_LIDX += 1
+        self.hg = CppGenerator()
+        self.sg = CppGenerator()
         self.generate_csrc(model)
+
     def __del__(self):
         try:
             os.remove("generated/lib{}.so".format(self.model_name))
         except FileNotFoundError:
             pass
-    
-    def cpp(self, s="", incr=0):
-        if incr < 0:
-            self.indent += incr
-        if s:
-            self.halogen_str += "  " * self.indent
-        self.halogen_str += "{}\n".format(s)
-        if incr > 0:
-            self.indent += incr
 
     def run(self, inputs, **kwargs):
         i = 0
@@ -154,11 +76,11 @@ class HalideBackendRep(BackendRep):
 
 
     def generate_csrc(self, model):
-        self.cpp("#include \"Halide.h\"")
-        self.cpp("#include <stdint.h>")
-        self.cpp("#include <cfloat>")
-        self.cpp("#include <limits.h>")
-        self.cpp()
+        self.hg("#include \"Halide.h\"")
+        self.hg("#include <stdint.h>")
+        self.hg("#include <cfloat>")
+        self.hg("#include <limits.h>")
+        self.hg()
 
         self.funcs   = {}
         self.init_data = {}
@@ -172,11 +94,12 @@ class HalideBackendRep(BackendRep):
                                           dtype=HalogenType.from_onnx(init.data_type).np)
             self.init_data[init.name] = onnx_data
 
-        self.cpp("using namespace Halide;")
-        self.cpp("namespace {")
+        self.hg("using namespace Halide;")
+        self.hg("using namespace BoundaryConditions;")
+        self.hg("namespace {")
 
-        self.cpp("class HalOGen : public Generator<HalOGen> {", 1)
-        self.cpp("public:", 1)
+        self.hg("class HalOGen : public Generator<HalOGen> {", 1)
+        self.hg("public:", 1)
         # Create arrays for input buffers
         input_scalars = []
         for tensor, is_output in list(map(lambda x:(x,0), model.graph.input)) \
@@ -192,14 +115,14 @@ class HalideBackendRep(BackendRep):
                                                 type,
                                                 -1 if is_output else 1)
             if is_scalar:
-                self.cpp("{2}<{0}> {1}{{\"{1}\"}};".format(
+                self.hg("{2}<{0}> {1}{{\"{1}\"}};".format(
                     type.c,
                     onnx_name + ("" if is_output else "_s"),
                     "Output" if is_output else "Input "))
                 if not is_output:
                     input_scalars.append(self.funcs[tensor.name])
             else:
-                self.cpp("{4}<Buffer<{0}>> {1}{{\"{1}\", {2}}}; //{0}{3}".format(
+                self.hg("{4}<Buffer<{0}>> {1}{{\"{1}\", {2}}}; //{0}{3}".format(
                     type.c,
                     onnx_name,
                     len(c_shape),
@@ -208,35 +131,47 @@ class HalideBackendRep(BackendRep):
 
             self.c_args.append(tensor.name)
 
+
+
+        dv = self.hg.block()
         # Generate the Halide compute function
-        self.cpp()
-        self.cpp("void generate() {", 1);
+        self.hg()
+        self.hg("void generate() {", 1);
         for ip in input_scalars:
             self.generate_func(ip.name)
-            self.cpp("{}() = {}_s;".format(
+            self.hg("{}() = {}_s;".format(
                 ip.name, ip.name))
+
         # Generate Funcs for operator nodes
+        generators = []
         for nidx, node in enumerate(model.graph.node):
-            self.cpp()
-            self.generate_node(nidx, node)
+            generators.append(NodeGenerator(node, self.hg.block(), self.funcs))
 
-        self.cpp("};", -1)
-        self.cpp("", -1)
-        self.cpp("};")
-        self.cpp("}", -1)
-        self.cpp("HALIDE_REGISTER_GENERATOR(HalOGen, halogen)")
+        n_dim_vars = max(map(lambda x:x.n_dim_vars, generators))
+        dim_vars = ["d_{}".format(i) for i in range(n_dim_vars)]
+        for dim_var in dim_vars:
+            dv("Var {};".format(dim_var))
+
+            
+        for generator in generators:
+            generator.generate_alg(dim_vars[:generator.n_dim_vars])
 
 
-        with open("generated/halogen_generator.cpp", 'w') as f:
-            f.write(self.halogen_str)
+        self.hg("};", -1)
+        self.hg("", -1)
+        self.hg("};")
+        self.hg("}", -1)
+        self.hg("HALIDE_REGISTER_GENERATOR(HalOGen, halogen)")
+
+        self.hg.write("generated/halogen_generator.cpp")
 
         # Generate C shim to Halide generated code
         self.halogen_str = """"""
-        self.cpp("#include \"Halide.h\"")
-        self.cpp("#include \"halogen.h\"")
-        self.cpp("using float16_t = Halide::float16_t;")
-        self.cpp("using namespace Halide::Runtime;")
-        self.cpp("extern \"C\" {", 1)
+        self.sg("#include \"Halide.h\"")
+        self.sg("#include \"halogen.h\"")
+        self.sg("using float16_t = Halide::float16_t;")
+        self.sg("using namespace Halide::Runtime;")
+        self.sg("extern \"C\" {", 1)
         py_args      = []
         buffers      = []
         ha_args      = []
@@ -259,17 +194,16 @@ class HalideBackendRep(BackendRep):
                 output_s.append("{0}[0] = {0}_buf();".format(fn.name))
             ha_args.append("{}{}".format(fn.name,
                                          "" if fn.is_scalar and fn.is_input else "_buf"))
-        self.cpp("int halogen_c({}) {{".format(','.join(py_args)), 1)
+        self.sg("int halogen_c({}) {{".format(','.join(py_args)), 1)
         for buf in buffers:
-            self.cpp(buf)
-        self.cpp("int r = halogen({});".format(','.join(ha_args)))
+            self.sg(buf)
+        self.sg("int r = halogen({});".format(','.join(ha_args)))
         for op in output_s:
-            self.cpp(op)
-        self.cpp("return r;")
-        self.cpp("}", -1)
-        self.cpp("}", -1)
-        with open("generated/halogen_c.cpp", 'w') as f:
-            f.write(self.halogen_str)
+            self.sg(op)
+        self.sg("return r;")
+        self.sg("}", -1)
+        self.sg("}", -1)
+        self.sg.write("generated/halogen_c.cpp")
 
         cmd  = "g++ -std=c++11 -I {0}/include/ -I {0}/tools/ -g -fno-rtti "
         cmd += "generated/halogen_generator.cpp {0}/tools/GenGen.cpp {0}/lib/libHalide.a "
@@ -668,7 +602,7 @@ class HalideBackendRep(BackendRep):
         else:
             op_shape.pop(axis)
         op_type = type if type else ip.type
-        self.cpp("{}({}) = cast<{}>({}({}({}))[0]);".format(
+        self.cpp("{0}({1}) = cast<{2}>({3}({4}({5}))[0]);".format(
             op.name, ','.join(op_dim_vars[::-1]),
             op_type.c,
             expr,

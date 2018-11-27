@@ -17,7 +17,7 @@ class HalogenType:
         self.c_min       = min
         self.c_max       = max
         HalogenType.onnx_int_dict[self.onnx_int] = self
-        HalogenType.c_dict       [self.c] = self
+        HalogenType.c_dict[self.c] = self
 
     def __eq__(self, other):
         return self.onnx_int == other.onnx_int
@@ -38,4 +38,62 @@ TYPE_MAP = [("FLOAT16","float16_t",np.float16,ctypes.c_short   ,"float16_t.make_
 for ts in TYPE_MAP:
     HalogenType(*ts)
 
-    
+
+class HalideObj:
+    def __init__(self, name=None, shape=-1, type=None, io=0):
+        self._name = name
+        self._shape = -1 if shape == -1 else \
+                      tuple([int(i) for i in shape])
+        self._type = type
+        self._io = io
+
+    @property
+    def name(self):
+        assert(self._name)
+        return self._name
+    @property
+    def shape(self):
+        assert(self._shape != -1)
+        return list(self._shape)
+    @property
+    def size(self):
+        return int(np.prod(self.shape))
+    @property
+    def dims(self):
+        return len(self.shape)
+    @property
+    def is_scalar(self):
+        assert(self._shape != -1)
+        return self._shape == ()
+    @property
+    def type(self):
+        assert(self._type)
+        return self._type
+    @property
+    def is_input(self):
+        assert(self._io != 0)
+        return self._io == 1
+    @property
+    def is_output(self):
+        assert(self._io != 0)
+        return self._io == -1
+
+    def set_shape(self, shape):
+        assert(all([type(i) == int for i in shape]))
+
+        if (self._shape != tuple(shape) and self._shape != -1):
+            print(self._shape, tuple(shape))
+            assert(False)
+        self._shape = tuple(shape)
+    def set_type(self, typ):
+        assert(not self._type or self._type == typ)
+        assert(type(typ) == HalogenType)
+        self._type = typ
+
+    def __str__(self):
+        return "({}, {}, {}, {})".format(self._name,
+                                         self._shape,
+                                         self._type.c,
+                                         {1:"INPUT",
+                                          0:"NODE",
+                                          -1:"OUTPUT"}[self._io])
