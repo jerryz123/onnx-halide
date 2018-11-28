@@ -139,7 +139,7 @@ class HalideBackendRep(BackendRep):
         self.hg()
         self.hg("void generate() {", 1);
         for ip in input_scalars:
-            self.generate_func(ip.name)
+            self.hg("Func {};".format(ip.name))
             self.hg("{}() = {}_s;".format(
                 ip.name, ip.name))
 

@@ -60,15 +60,19 @@ class NodeGenerator:
 
         # Find input funcs
         n_ip = len(node.input)
+        self.ips = []
         for i in range(n_ip):
             setattr(self, "ip{}".format(i),
                     funcs[node.input[i]])
+            self.ips.append(funcs[node.input[i]])
 
         # Find output funcs
         n_op = len(node.output)
+        self.ops = []
         for i in range(n_op):
             setattr(self, "op{}".format(i),
                     funcs[node.output[i]])
+            self.ops.append(funcs[node.output[i]])
 
         # Find attrs
         for attr_name, (attr_k, attr_v, attr_def) in self.attr_fields.items():
@@ -131,8 +135,11 @@ class NodeGenerator:
                 ip if type(ip) == str else ip.name,
                 pad_const,
                 ','.join(["{{{},{}}}".format(a, b) for a, b in pad_doms][::-1])))
-    def generate_cast(self, type, expr):
-        return "cast<{}>({})".format(type.c, expr)
+    def generate_cast(self, type_, expr):
+        if type(expr) != str:
+            return "cast<{}>(Expr({}))".format(type_.c, expr)
+        else:
+            return "cast<{}>({})".format(type_.c, expr)
 
     def generate_rdom(self, name, ranges):
         rdom_name = "{}_{}".format(self.op0.name, name)
@@ -236,7 +243,83 @@ class HardSigmoidGenerator(UnaryGenerator):
 class IdentityGenerator(UnaryGenerator):
     op_type = "Identity"
     expr    = "{}"
-    
+
+class LeakyReluGenerator(UnaryGenerator):
+    op_type = "LeakyRelu"
+    attr_fields = {"alpha":("alpha", "f", 0.01)}
+    @property
+    def expr(self):
+        return "select({{0}}<0,{}*{{0}},{{0}})".format(
+            self.generate_cast(self.op0.type, "Expr({})".format(self.alpha_)))
+
+class LogGenerator(UnaryGenerator):
+    op_type = "Log"
+    expr    = "log({})"
+
+class NegGenerator(UnaryGenerator):
+    op_type = "Neg"
+    expr    = "-{}"
+
+class NotGenerator(UnaryGenerator):
+    op_type = "Not"
+    expr    = "cast<int8_t>({}==0)"
+
+class ReciprocalGenerator(UnaryGenerator):
+    op_type = "Reciprocal"
+    expr    = "1/{}"
+
+class ReluGenerator(UnaryGenerator):
+    op_type = "Relu"
+    expr    = "select({0}>0,{0},0)"
+
+class SeluGenerator(UnaryGenerator):
+    op_type = "Selu"
+    attr_fields = {"alpha":("alpha","f",1.67326),
+                   "gamma":("gamma","f",1.0507)}
+    @property
+    def expr(self):
+        return "select({{0}}<0,{0}*({1}*exp({{0}})-{1}),{0}*{{0}})".format(
+            self.generate_cast(self.op0.type, self.gamma_),
+            self.generate_cast(self.op0.type, self.alpha_)
+            )
+
+class SigmoidGenerator(UnaryGenerator):
+    op_type = "Sigmoid"
+    expr    = "(1/(1+exp(-{})))"
+
+class SinGenerator(UnaryGenerator):
+    op_type = "Sin"
+    expr    = "sin({})"
+
+class SoftplusGenerator(UnaryGenerator):
+    op_type = "Softplus"
+    expr    = "log(exp({})+1)"
+
+class SoftsignGenerator(UnaryGenerator):
+    op_type = "Softsign"
+    expr    = "{0}/(1+abs({0}))"
+
+class SqrtGenerator(UnaryGenerator):
+    op_type = "Sqrt"
+    expr    = "sqrt({})"
+
+class TanGenerator(UnaryGenerator):
+    op_type = "Tan"
+    expr    = "tan({})"
+
+class TanhGenerator(UnaryGenerator):
+    op_type = "Tanh"
+    expr    = "tanh({})"
+
+class ThrehReluGenerator(UnaryGenerator):
+    op_type = "ThresholdedRelu"
+    attr_fields = {"alpha":("alpha", "f", 1.0)}
+    @property
+    def expr(self):
+        return "select({{0}}>{},{{0}},0)".format(
+            self.generate_cast(self.op0.type, self.alpha_))
+            
+
 class BinaryGenerator(NodeGenerator):
     def infer_shapes(self):
         dims = max(self.ip0.dims, self.ip1.dims)
@@ -273,6 +356,18 @@ class DivGenerator(BinaryGenerator):
     op_type = "Div"
     expr    = "{}/{}"
 
+class MulGenerator(BinaryGenerator):
+    op_type = "Mul"
+    expr    = "{}*{}"
+
+class PowGenerator(BinaryGenerator):
+    op_type = "Pow"
+    expr    = "pow({},{})"
+
+class SubGenerator(BinaryGenerator):
+    op_type = "Sub"
+    expr    = "{}-{}"
+
 class BinOpGenerator(BinaryGenerator):
     def infer_types(self):
         self.op0.set_type(HalogenType.from_c("int8_t"))
@@ -284,6 +379,18 @@ class EqualGenerator(BinOpGenerator):
 class GreaterGenerator(BinOpGenerator):
     op_type = "Greater"
     expr    = "cast<int8_t>({}>{})"
+
+class LessGenerator(BinOpGenerator):
+    op_type = "Less"
+    expr    = "cast<int8_t>({}<{})"
+
+class OrGenerator(BinOpGenerator):
+    op_type = "Or"
+    expr    = "cast<int8_t>({}|{})"
+
+class XorGenerator(BinOpGenerator):
+    op_type = "Xor"
+    expr    = "cast<int8_t>({}^{})"
 
 class ArgMGenerator(NodeGenerator):
     attr_fields = {"keepdims":("keepdims", "i", 1),
@@ -444,16 +551,16 @@ class MaxPoolGenerator(PoolGenerator):
         return self.ip0.type.c_min
     def pp_attrs(self):
         PoolGenerator.pp_attrs(self)
-        self.has_id_ = hasattr(self, "ip1")
+        self.has_id_ = hasattr(self, "op1")
     def infer_types(self):
         PoolGenerator.infer_types(self)
         if self.has_id_:
-            self.ip1.set_type(HalogenType.from_c("int64_t"))
+            self.op1.set_type(HalogenType.from_c("int64_t"))
 
     def infer_shapes(self):
         PoolGenerator.infer_shapes(self)
         if self.has_id_:
-            self.ip1.set_shape(self.op0.shape)
+            self.op1.set_shape(self.op0.shape)
 
     def generate_pool_rhs(self, dim_vars, red_vars, ip_vars, padded_expr):
         if self.has_id_:
@@ -475,9 +582,9 @@ class MaxPoolGenerator(PoolGenerator):
                                   [{}]*self.n_ign_dims_ + self.strides_,
                                   [{}]*self.n_ign_dims_ + self.pads_,
                                   prod[::-1]))]
-            self.generate_asn(self.generate_funcref(self.ip1,
+            self.generate_asn(self.generate_funcref(self.op1,
                                                     dim_vars),
-                              self.generate_cast(self.ip1.type,
+                              self.generate_cast(self.op1.type,
                                                  "+".join(maxed_vars)))
         rhs = "maximum({})".format(padded_expr)
         return rhs
@@ -667,9 +774,9 @@ class PadGenerator(NodeGenerator):
                 ",".join(["{{0,{}}}".format(ips) \
                           for ips in self.ip0.shape[::-1]]))
         elif self.mode_ == "reflect":
-            rhs = "repeat_mirror_interior({},{{{}}})".format(
+            rhs = "mirror_interior({},{{{}}})".format(
                 self.ip0.name,
-                ",".join(["{{0,{}}}".format(ips) \
+                ",".join(["{{0,{}}}".format(ips) if ips > 1 else "{Expr(),Expr()}"\
                           for ips in self.ip0.shape[::-1]]))
         self.generate_asn(lhs, rhs)
 
@@ -933,8 +1040,399 @@ class HardmaxGenerator(FeaturemaxGenerator):
             self.op0.name,
             self.generate_funcref(self.ip0, ip_vars)))
         return self.generate_cast(self.op0.type,
-                                  "&&".join(["({}_am[{}]=={})".format(self.op0.name,
-                                                                      i,
-                                                                      dv)
-                                             for i, dv in enumerate(dim_vars[self.axis_:])]))
+                                  "&&".join(
+                                      ["({}_am[{}]=={})".format(self.op0.name,
+                                                                i,
+                                                                dv)
+                                       for i, dv in enumerate(dim_vars[self.axis_:])]))
 
+class LogSoftmaxGenerator(FeaturemaxGenerator):
+    op_type = "LogSoftmax"
+    def generate_rhs(self, dim_vars, ip_vars, red_vars):
+        norm_ip = self.generate_funcdecl("norm_ip")
+        self.generate_asn(self.generate_funcref(norm_ip, dim_vars),
+                          "{}-maximum({})".format(
+                              self.generate_funcref(self.ip0, dim_vars),
+                              self.generate_funcref(self.ip0, ip_vars)))
+        return "({}-log(sum(exp({}))))".format(
+            self.generate_funcref(norm_ip, dim_vars),
+            self.generate_funcref(norm_ip, ip_vars))
+
+class SoftmaxGenerator(FeaturemaxGenerator):
+    op_type = "Softmax"
+    def generate_rhs(self, dim_vars, ip_vars, red_vars):
+        max_x = self.generate_funcdecl("max_x")
+        self.generate_asn(self.generate_funcref(max_x, dim_vars),
+                          "maximum({})".format(self.generate_funcref(
+                              self.ip0, ip_vars)))
+        exp_x = self.generate_funcdecl("exp_x")
+        self.generate_asn(self.generate_funcref(exp_x, dim_vars),
+                          "exp({}-{})".format(
+                              self.generate_funcref(self.ip0, dim_vars),
+                              self.generate_funcref(max_x, dim_vars)))
+        return "{}/sum({})".format(
+            self.generate_funcref(exp_x, dim_vars),
+            self.generate_funcref(exp_x, ip_vars))
+
+class InstanceNormGenerator(NodeGenerator):
+    op_type = "InstanceNormalization"
+    attr_fields = {"eps": ("epsilon", "f", 1e-5)}
+    def generate_alg(self, dim_vars):
+        red_vars = self.generate_rdom("r", [(0,s) for s in self.op0.shape[2:]])
+        eps = self.generate_cast(self.op0.type, "Expr({})".format(self.eps_))
+
+        mean_f = self.generate_funcdecl("mean_f")
+        self.generate_asn(self.generate_funcref(mean_f, dim_vars[:2]),
+                          "sum({})/{}".format(
+                              self.generate_funcref(self.ip0, dim_vars[:2] + red_vars),
+                              np.prod(self.ip0.shape[2:])))
+
+        var_f = self.generate_funcdecl("var_f")
+        self.generate_asn(self.generate_funcref(var_f, dim_vars[:2]),
+                          "(sum(pow({},2))/{} - pow({},2))".format(
+                              self.generate_funcref(self.ip0, dim_vars[:2] + red_vars),
+                              np.prod(self.ip0.shape[2:]),
+                              self.generate_funcref(mean_f, dim_vars[:2])))
+
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          "({}*({}-{})/(sqrt({}+{}))+{})".format(
+                              self.generate_funcref(self.ip1, [dim_vars[1]]),
+                              self.generate_funcref(self.ip0, dim_vars),
+                              self.generate_funcref(mean_f, dim_vars[:2]),
+                              self.generate_funcref(var_f, dim_vars[:2]),
+                              eps,
+                              self.generate_funcref(self.ip2, [dim_vars[1]])))
+
+class LRNGenerator(NodeGenerator):
+    op_type = "LRN"
+    attr_fields = {"alpha":("alpha", "f", 0.0001),
+                   "beta" :("beta" , "f", 0.75),
+                   "bias" :("bias" , "f", 1.0),
+                   "size" :("size" , "i", None)}
+    def generate_alg(self, dim_vars):
+        red_var = self.generate_rdom("r", [(-floor((self.size_-1)/2),
+                                            ceil((self.size_-1)/2))])[0]
+        padded = self.generate_padded("pad",
+                                      self.ip0,
+                                      0,
+                                      [("Expr()", "Expr()") if i != 1 else \
+                                       (0, self.ip0.shape[1]) for i in \
+                                       range(self.ip0.dims)])
+        sq_sum = self.generate_funcdecl("sq_sum")
+        self.generate_asn(self.generate_funcref(sq_sum, dim_vars),
+                          "sum(pow({},2))".format(
+                              self.generate_funcref(
+                                  padded,
+                                  [dim_vars[0], red_var] + dim_vars[2:])))
+
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          "{}/pow({}+({}/{})*{},{})".format(
+                              self.generate_funcref(self.ip0, dim_vars),
+                              self.generate_cast(self.op0.type, self.bias_),
+                              self.generate_cast(self.op0.type, self.alpha_),
+                              self.generate_cast(self.op0.type, self.size_),
+                              self.generate_funcref(sq_sum, dim_vars),
+                              self.generate_cast(self.op0.type, self.beta_)))
+
+class MatMulGenerator(NodeGenerator):
+    op_type = "MatMul"
+    def infer_shapes(self):
+        if self.ip0.dims == self.ip1.dims == 2:
+            self._case = 0
+            op_shape = [self.ip0.shape[0], self.ip1.shape[1]]
+        elif self.ip0.dims > 2 and self.ip1.dims == 2:
+            self._case = 1
+            op_shape = self.ip0.shape[:-1] + [self.ip1.shape[1]]
+        elif self.ip0.dims == 2 and self.ip1.dims > 2:
+            self._case = 2
+            op_shape = self.ip1.shape[:-1] + [self.ip0.shape[0], self.ip1.shape[-1]]
+        elif self.ip0.dims > 2 and self.ip1.dims > 2:
+            self._case = 3
+            op_shape = self.ip1.shape[:-2] + [self.ip0.shape[-2], self.ip1.shape[-1]]
+        self.op0.set_shape(op_shape)
+    def generate_alg(self, dim_vars):
+        K = self.ip0.shape[-1]
+        red_var = self.generate_rdom("r", [(0, K)])[0]
+        if self._case == 0:
+            a_vars = [dim_vars[0], red_var]
+            b_vars = [red_var, dim_vars[1]]
+        elif self._case == 1:
+            a_vars = dim_vars[:-1] + [red_var]
+            b_vars = [red_var, dim_vars[-1]]
+        elif self._case == 2:
+            a_vars = [dim_vars[-2], red_var]
+            b_vars = dim_vars[:-2] + [red_var, dim_vars[-1]]
+        elif self._case == 3:
+            a_vars = dim_vars[:-1] + [red_var]
+            b_vars = dim_vars[:-2] + [red_var, dim_vars[-1]]
+
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          "sum({}*{})".format(
+                              self.generate_funcref(self.ip0, a_vars),
+                              self.generate_funcref(self.ip1, b_vars)))
+
+
+class VarGenerator(NodeGenerator):
+    def infer_shape(self):
+        if len(self.ips) == 1:
+            self.op0.set_shape(self.ip0.shape)
+        else:
+            dims = max([len(ip.shape) for ip in self.ips])
+            op_shape = [1] * dims
+            for ip in self.ips:
+                op_shape = [op_shape[-i] if i > ip.dims else \
+                            max(ip.shape[-i], op.shape[-i]) for \
+                            i in range(1, dims+1)][::-1]
+            self.op0.set_shape(op_shape)
+    def generate_alg(self, dim_vars):
+        lhs = self.generate_funcref(self.op0, dim_vars)
+        if len(self.ips) == 1:
+            rhs = self.generate_funcref(self.ip0, dim_vars)
+        else:
+            ip_vars = []
+            for ip in self.ips:
+                ip_vars.append([(dv if dim > 1 else "0") for dim, dv in\
+                                zip(ip.shape, dim_vars[-ip.dims:])])
+            rhs = self.generate_rhs(dim_vars, ip_vars)
+        self.generate_asn(lhs, rhs)
+
+class MinMaxGenerator(VarGenerator):
+    def generate_rhs(self, dim_vars, ip_vars):
+        return "{}({})".format(
+            self.op_type.lower(),
+            ",".join([self.generate_funcref(ip, ipv) \
+                      for ip, ipv in zip(self.ips, ip_vars)]))
+class MaxGenerator(MinMaxGenerator):
+    op_type = "Max"
+class MinGenerator(MinMaxGenerator):
+    op_type = "Min"
+
+class MeanGenerator(VarGenerator):
+    op_type = "Mean"
+    def generate_rhs(self, dim_vars, ip_vars):
+        return "({})/{}".format(
+            "+".join([self.generate_funcref(ip, ipv) for\
+                      ip, ipv in zip(self.ips, ip_vars)]),
+            self.generate_cast(self.op0.type, len(self.ips)))
+
+class SumGenerator(VarGenerator):
+    op_type = "Sum"
+    def generate_rhs(self, dim_vars, ip_vars):
+        return "{}".format(
+            "+".join([self.generate_funcref(ip, ipv) for \
+                      ip, ipv in zip(self.ips, ip_vars)]))
+
+class PReluGenerator(NodeGenerator):
+    op_type = "PRelu"
+    def generate_alg(self, dim_vars):
+        ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in\
+                        zip(self.ip1.shape[::-1], dim_vars[::-1])][::-1]
+
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          "select({0}<0,{0}*{1},{0})".format(
+                              self.generate_funcref(self.ip0, dim_vars),
+                              self.generate_funcref(self.ip1, ip1_dim_vars)))
+
+class RedlGenerator(NodeGenerator):
+    attr_fields = {"keepdims":("keepdims", "i"   , 1),
+                   "axes"    :("axes"    , "ints", None)}
+    def pp_attrs(self):
+        self.axes_ = self.axes_ or list(range(self.ip0.dims))
+    def infer_shapes(self):
+        if self.keepdims_:
+            op_shape = [s if i not in self.axes_ else 1 \
+                        for i, s in enumerate(self.ip0.shape)]
+        else:
+            op_shape = [s for i, s in enumerate(self.ip0.shape) if i not in self.axes_]
+        self.op0.set_shape(op_shape)
+    def generate_alg(self, dim_vars):
+        red_vars = list(zip(self.axes_,
+                            self.generate_rdom("r",
+                                               [(0,self.ip0.shape[i]) \
+                                                for i in self.axes_])))
+
+        if self.keepdims_:
+            zd_vars = list(zip([i for i in range(len(self.ip0.shape)) \
+                                if i not in self.axes_],
+                               [dv for i, dv in enumerate(dim_vars) \
+                                if i not in self.axes_]))
+        else:
+            zd_vars = list(zip([i for i in range(len(self.ip0.shape)) \
+                                if i not in self.axes_],
+                               dim_vars))
+        ip_vars = [None] * self.ip0.dims
+        for i, rv in red_vars:
+            ip_vars[i] = rv
+        for i, dv in zd_vars:
+            ip_vars[i] = dv
+
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          self.expr.format(self.generate_funcref(self.ip0,
+                                                                 ip_vars)))
+
+class ReduceL1Generator(RedlGenerator):
+    op_type = "ReduceL1"
+    expr    = "sum(abs({}))"
+
+
+class ReduceL2Generator(RedlGenerator):
+    op_type = "ReduceL2"
+    expr    = "sqrt(sum(pow({},2)))"
+
+class ReduceLogSum(RedlGenerator):
+    op_type = "ReduceLogSum"
+    expr    = "log(sum({}))"
+
+class ReduceLogSumExp(RedlGenerator):
+    op_type = "ReduceLogSumExp"
+    expr    = "log(sum(exp({})))"
+
+class ReduceMax(RedlGenerator):
+    op_type = "ReduceMax"
+    expr    = "maximum({})"
+
+class ReduceMean(RedlGenerator):
+    op_type = "ReduceMean"
+    @property
+    def expr(self):
+        return "sum({{}})/{}".format(
+            np.prod([self.ip0.shape[i] for i in self.axes_]))
+
+class ReduceMin(RedlGenerator):
+    op_type = "ReduceMin"
+    expr    = "minimum({})"
+
+class ReduceProd(RedlGenerator):
+    op_type = "ReduceProd"
+    expr    = "product({})"
+
+class ReduceSum(RedlGenerator):
+    op_type = "ReduceSum"
+    expr    = "sum({})"
+
+class ReduceSumSquare(RedlGenerator):
+    op_type = "ReduceSumSquare"
+    expr    = "sum(pow({},2))"
+
+class ShapeGenerator(NodeGenerator):
+    op_type = "Shape"
+    def infer_shapes(self):
+        self.op0.set_shape([self.ip0.dims])
+    def infer_types(self):
+        self.op0.set_type(HalogenType.from_c("int64_t"))
+    def generate_alg(self, dim_vars):
+        self.alg("int64_t* {}_c = new int64_t[{}] {{{}}};".format(
+            self.op0.name,
+            self.ip0.dims,
+            ",".join(map(str,self.ip0.shape))))
+        self.alg("Buffer<int64_t> {0}_b({0}_c, {{{1}}});".format(
+            self.op0.name,
+            self.ip0.dims))
+        self.alg("Func {0}_fb({0}_b);".format(
+            self.op0.name))
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          self.generate_funcref("{}_fb".format(self.op0.name),
+                                                dim_vars))
+
+class SizeGenerator(NodeGenerator):
+    op_type = "Size"
+    def infer_shapes(self):
+        self.op0.set_shape(())
+    def infer_types(self):
+        self.op0.set_type(HalogenType.from_c("int64_t"))
+    def generate_alg(self, dim_vars):
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          self.generate_cast(self.op0.type, self.ip0.size))
+
+class SliceGenerator(NodeGenerator):
+    op_type = "Slice"
+    attr_fields = {"axes":("axes","ints",None),
+                   "ends":("ends","ints",None),
+                   "starts":("starts","ints",None)}
+    def pp_attrs(self):
+        self.axes_ = self.axes_ or list(range(len(self.starts_)))
+    def infer_shapes(self):
+        op_shape = self.ip0.shape
+        self.st_dict_ = {}
+        for (i, s, e) in zip(self.axes_, self.starts_, self.ends_):
+            s = max(0, min(self.ip0.shape[i], s))
+            if e < 0:
+                e = self.ip0.shape[i] + e
+            e = min(self.ip0.shape[i], e)
+            op_shape[i] = e - s
+            self.st_dict_[i] = s
+        self.op0.set_shape(op_shape)
+    def generate_alg(self, dim_vars):
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          self.generate_funcref(self.ip0,
+                                                ["{}+{}".format(dv,
+                                                                self.st_dict_[i]) \
+                                                 if i in self.st_dict_ else dv \
+                                                 for i, dv in \
+                                                 enumerate(dim_vars)]))
+
+class SplitGenerator(NodeGenerator):
+    op_type = "Split"
+    attr_fields = {"axis":("axis","i",0),
+                   "split":("split","ints",None)}
+    def pp_attrs(self):
+        self.split_ = self.split_ or [int(self.ip0.shape[self.axis_]//len(self.ops))] * len(self.ops)
+
+    def infer_types(self):
+        for op in self.ops:
+            op.set_type(self.ip0.type)
+    def infer_shapes(self):
+        for op, s in zip(self.ops, self.split_):
+            op_shape = self.ip0.shape
+            op_shape[self.axis_] = s
+            op.set_shape(op_shape)
+    def generate_alg(self, dim_vars):
+        s_sum = 0
+        for op, s in zip(self.ops, self.split_):
+            ip_vars = list(dim_vars)
+            ip_vars[self.axis_] += "+{}".format(s_sum)
+            self.generate_asn(self.generate_funcref(op, dim_vars),
+                              self.generate_funcref(self.ip0, ip_vars))
+            s_sum += s
+        
+class SqueezeGenerator(NodeGenerator):
+    op_type = "Squeeze"
+    attr_fields = {"axes":("axes", "ints", None)}
+    def infer_shapes(self):
+        self.op0.set_shape([s for i, s in enumerate(self.ip0.shape) \
+                            if i not in self.axes_])
+    def generate_alg(self, dim_vars):
+        ip_vars = ["0"] * len(self.ip0.shape)
+        for i, dv in zip([i for i in range(len(self.ip0.shape)) \
+                          if i not in self.axes_],
+                         dim_vars):
+            ip_vars[i] = dv
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          self.generate_funcref(self.ip0, ip_vars))
+
+class TransposeGenerator(NodeGenerator):
+    op_type = "Transpose"
+    attr_fields = {"perms":("perm","ints",None)}
+    def pp_attrs(self):
+        self.perms_ = self.perms_ or list(range(self.ip0.dims))[::-1]
+    def infer_shapes(self):
+        self.op0.set_shape([self.ip0.shape[i] for i in self.perms_])
+    def generate_alg(self, dim_vars):
+        self.generate_asn(self.generate_funcref(self.op0,
+                                                [dim_vars[i] for i in self.perms_]),
+                          self.generate_funcref(self.ip0, dim_vars))
+
+class UnsqueezeGenerator(NodeGenerator):
+    op_type = "Unsqueeze"
+    attr_fields = {"axes":("axes","ints",None)}
+    def infer_shapes(self):
+        op_shape = self.ip0.shape
+        self.orig_s_ = [1] * self.ip0.dims
+        for i in self.axes_:
+            op_shape.insert(i, 1)
+            self.orig_s_.insert(i, 0)
+    def generate_alg(self, dim_vars):
+        ip_vars = [dv for i, dv in enumerate(dim_vars) if self.orig_s_[i]]
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          self.generate_funcref(self.ip0, ip_vars))
+            
