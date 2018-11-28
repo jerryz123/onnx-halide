@@ -57,7 +57,8 @@ class NodeGenerator:
         self.__class__ = NodeGenerator.match_class(node)
         assert(self.__class__ and self.op_type)
         self.alg = alg_generator
-
+        self.alg("// {}".format(self.op_type))
+        self.alg()
         # Find input funcs
         n_ip = len(node.input)
         self.ips = []
@@ -70,9 +71,13 @@ class NodeGenerator:
         n_op = len(node.output)
         self.ops = []
         for i in range(n_op):
+            if node.output[i] not in funcs:
+                f_name = "f_" + node.output[i].replace('/','').replace('-','')
+                funcs[node.output[i]] = HalideObj(f_name,)
+                self.alg("Func {};".format(f_name))
+            self.ops.append(funcs[node.output[i]])
             setattr(self, "op{}".format(i),
                     funcs[node.output[i]])
-            self.ops.append(funcs[node.output[i]])
 
         # Find attrs
         for attr_name, (attr_k, attr_v, attr_def) in self.attr_fields.items():
@@ -645,7 +650,7 @@ class ConvGenerator(NodeGenerator):
         padded_expr = self.generate_funcref(padded, ip_vars)
         
         if self.bias_:
-            bias_expr = self.generate_funcref(self.ip2, dim_vars[1])
+            bias_expr = self.generate_funcref(self.ip2, [dim_vars[1]])
         else:
             bias_expr = "0"
 
@@ -730,7 +735,7 @@ class ConstantGenerator(NodeGenerator):
     def generate_alg(self, dim_vars):
         lhs = self.generate_funcref(self.op0, dim_vars)
         if self.op0.is_scalar:
-            rhs = "Expr({})".format(self.t_data_[0])
+            rhs = self.generate_cast(self.op0.type, self.t_data_[0])
         else:
             self.alg("{0}* {3}_a = new {0}[{1}] {{{2}}};".format(
                 self.op0.type.c,
@@ -881,7 +886,7 @@ class ConvTGenerator(NodeGenerator):
                         self.pads_)]
         if self.bias:
             bias_expr = "+{}".format(self.generate_funcref(self.bias,
-                                                           dim_vars[1]))
+                                                           [dim_vars[1]]))
         else:
             bias_expr = ""
         lhs = self.generate_funcref(self.op0, dim_vars)
@@ -1225,8 +1230,11 @@ class SumGenerator(VarGenerator):
 class PReluGenerator(NodeGenerator):
     op_type = "PRelu"
     def generate_alg(self, dim_vars):
+        i = 0
+        while self.ip1.shape[-1] > 1 and self.ip1.shape[-1] != self.ip0.shape[::-1][i]:
+            i += 1
         ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in\
-                        zip(self.ip1.shape[::-1], dim_vars[::-1])][::-1]
+                        zip(self.ip1.shape[::-1], dim_vars[::-1][i:])][::-1]
 
         self.generate_asn(self.generate_funcref(self.op0, dim_vars),
                           "select({0}<0,{0}*{1},{0})".format(
@@ -1431,6 +1439,7 @@ class UnsqueezeGenerator(NodeGenerator):
         for i in self.axes_:
             op_shape.insert(i, 1)
             self.orig_s_.insert(i, 0)
+        self.op0.set_shape(op_shape)
     def generate_alg(self, dim_vars):
         ip_vars = [dv for i, dv in enumerate(dim_vars) if self.orig_s_[i]]
         self.generate_asn(self.generate_funcref(self.op0, dim_vars),
