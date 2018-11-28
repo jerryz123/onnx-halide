@@ -30,7 +30,10 @@ class CppGenerator:
                 code.append(l)
             else:
                 for li in l.get_code():
-                    code.append("  " * indent + li)
+                    if li:
+                        code.append("  " * indent + li)
+                    else:
+                        code.append(li)
         return code
 
     def write(self, fname):
@@ -51,7 +54,7 @@ class NodeGenerator:
                 return m
         return False
 
-    def __init__(self, node, alg_generator, funcs):
+    def __init__(self, node, alg_generator, funcs, init_data):
         # Some strangeness here, find the generator which matches our
         # node's operator type, and set our type to that class
         self.__class__ = NodeGenerator.match_class(node)
@@ -66,6 +69,9 @@ class NodeGenerator:
             setattr(self, "ip{}".format(i),
                     funcs[node.input[i]])
             self.ips.append(funcs[node.input[i]])
+            if str(node.input[i]) in init_data:
+                self.ips[i].data = init_data[node.input[i]]
+
 
         # Find output funcs
         n_op = len(node.output)
@@ -1445,3 +1451,25 @@ class UnsqueezeGenerator(NodeGenerator):
         self.generate_asn(self.generate_funcref(self.op0, dim_vars),
                           self.generate_funcref(self.ip0, ip_vars))
             
+class ReshapeGenerator(NodeGenerator):
+    op_type = "Reshape"
+    def infer_shapes(self):
+        self.op0.set_shape(tuple(map(int, self.ip1.data)))
+    def generate_alg(self, dim_vars):
+        prevs = self.ip0.shape[1:] + [1]
+        prods = [np.prod(prevs[i:]) for i in range(len(prevs))]
+        ip_vars = ["cast<int>(floor({}/{}))%{}".format(dim_vars[0],
+                                                       prod,
+                                                       ips) \
+                   for ips, prod in \
+                   zip(self.ip0.shape, prods)]
+
+        flattened = self.generate_funcdecl("flattened")
+        self.generate_asn(self.generate_funcref(flattened, [dim_vars[0]]),
+                          self.generate_funcref(self.ip0, ip_vars))
+        prevs = self.op0.shape[1:] + [1]
+        prods = [np.prod(prevs[i:]) for i in range(len(prevs))]
+
+        fl_vars = ["({}*{})".format(dv, p) for dv, p in zip(dim_vars, prods)]
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          self.generate_funcref(flattened, ["+".join(fl_vars)]))

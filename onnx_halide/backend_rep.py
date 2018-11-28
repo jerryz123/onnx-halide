@@ -146,7 +146,8 @@ class HalideBackendRep(BackendRep):
         # Generate Funcs for operator nodes
         generators = []
         for nidx, node in enumerate(model.graph.node):
-            generators.append(NodeGenerator(node, self.hg.block(), self.funcs))
+            generators.append(NodeGenerator(node, self.hg.block(),
+                                            self.funcs, self.init_data))
             self.hg("//"*10)
         n_dim_vars = max(map(lambda x:x.n_dim_vars, generators))
         dim_vars = ["d_{}".format(i) for i in range(n_dim_vars)]
