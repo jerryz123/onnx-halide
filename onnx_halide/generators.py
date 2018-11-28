@@ -30,10 +30,7 @@ class CppGenerator:
                 code.append(l)
             else:
                 for li in l.get_code():
-                    if li:
-                        code.append("  " * indent + li)
-                    else:
-                        code.append(li)
+                    code.append("  " * indent + li)
         return code
 
     def write(self, fname):
@@ -54,14 +51,14 @@ class NodeGenerator:
                 return m
         return False
 
-    def __init__(self, node, alg_generator, funcs, init_data):
+    def __init__(self, node, alg_generator, sched_generator, funcs, init_data):
         # Some strangeness here, find the generator which matches our
         # node's operator type, and set our type to that class
         self.__class__ = NodeGenerator.match_class(node)
+        self.sch = sched_generator
         assert(self.__class__ and self.op_type)
         self.alg = alg_generator
         self.alg("// {}".format(self.op_type))
-        self.alg()
         # Find input funcs
         n_ip = len(node.input)
         self.ips = []
@@ -122,7 +119,8 @@ class NodeGenerator:
         raise NotImplementedError
 
     def generate_sched(self):
-        pass
+        for op in self.ops:
+            self.sch("{}.compute_root();".format(op.name))
 
     def generate_funcref(self, func, dim_vars):
         assert(type(func) == str or len(dim_vars) == func.dims)
