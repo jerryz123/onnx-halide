@@ -1120,7 +1120,7 @@ class LRNGenerator(NodeGenerator):
                    "size" :("size" , "i", None)}
     def generate_alg(self, dim_vars):
         red_var = self.generate_rdom("r", [(-floor((self.size_-1)/2),
-                                            ceil((self.size_-1)/2))])[0]
+                                            self.size_)])[0]
         padded = self.generate_padded("pad",
                                       self.ip0,
                                       0,
@@ -1132,7 +1132,9 @@ class LRNGenerator(NodeGenerator):
                           "sum(pow({},2))".format(
                               self.generate_funcref(
                                   padded,
-                                  [dim_vars[0], red_var] + dim_vars[2:])))
+                                  [dim_vars[0],
+                                   "{}+{}".format(red_var, dim_vars[1])] \
+                                   + dim_vars[2:])))
 
         self.generate_asn(self.generate_funcref(self.op0, dim_vars),
                           "{}/pow({}+({}/{})*{},{})".format(

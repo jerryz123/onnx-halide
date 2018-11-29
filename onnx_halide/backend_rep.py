@@ -53,16 +53,19 @@ class HalideBackendRep(BackendRep):
         for name, ctype in zip(self.c_args, self.halide_fn.argtypes):
             func = self.funcs[name]
             if func.is_input:
-                if i >= len(inputs):
+                if i >= len(inputs) or name in self.init_data:
                     input = self.init_data[name]
                 else:
                     input = inputs[i]
-                    assert(tuple(input.shape) == tuple(func.shape))
+                    if tuple(input.shape) != tuple(func.shape):
+                        print(tuple(input.shape), tuple(func.shape))
+                        print(func.name)
+                        assert(False)
+                    i += 1
                 if func.is_scalar:
                     args.append(ctype(input))
                 else:
                     args.append(input.ctypes.data_as(ctype))
-                i += 1
             else:
                 if func.is_scalar:
                     op = np.zeros(1, dtype=func.type.np)
@@ -138,6 +141,7 @@ class HalideBackendRep(BackendRep):
         # Generate the Halide compute function
         self.hg()
         self.hg("void generate() {", 1);
+        self.hg("get_target().set_feature(Target::StrictFloat);")
         for ip in input_scalars:
             self.hg("Func {};".format(ip.name))
             self.hg("{}() = {}_s;".format(
@@ -179,6 +183,7 @@ class HalideBackendRep(BackendRep):
         self.halogen_str = """"""
         self.sg("#include \"Halide.h\"")
         self.sg("#include \"halogen.h\"")
+        self.sg("#include <cfenv>")
         self.sg("using float16_t = Halide::float16_t;")
         self.sg("using namespace Halide::Runtime;")
         self.sg("extern \"C\" {", 1)
@@ -205,9 +210,11 @@ class HalideBackendRep(BackendRep):
             ha_args.append("{}{}".format(fn.name,
                                          "" if fn.is_scalar and fn.is_input else "_buf"))
         self.sg("int halogen_c({}) {{".format(','.join(py_args)), 1)
+
         for buf in buffers:
             self.sg(buf)
         self.sg("int r = halogen({});".format(','.join(ha_args)))
+
         for op in output_s:
             self.sg(op)
         self.sg("return r;")
@@ -223,7 +230,7 @@ class HalideBackendRep(BackendRep):
 
         cmd  = "generated/halogen.generator -g halogen -o generated -e "
         cmd += "assembly,bitcode,h,html,o,static_library,stmt,schedule "
-        cmd += "target=host"
+        cmd += "target=host-strict_float"
         r = subprocess.run(cmd, check=True, shell=True)
 
         cmd  = "g++ -fPIC -shared -std=c++11 "
