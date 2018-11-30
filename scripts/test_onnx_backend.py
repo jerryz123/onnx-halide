@@ -14,44 +14,43 @@ from onnx_halide.backend import HalideBackend
 pytest_plugins = 'onnx.backend.test.report',
 
 backend_test = onnx.backend.test.BackendTest(HalideBackend, __name__)
-# tests = [r'test_abs_cpu',
-#          r'test_abs_cpu',
-#          r'test_acos_cpu',
-#          r'test_acos_example_cpu',
-#          r'test_add_bcast_cpu',
-#          r'test_add_cpu',
-#          r'test_and2d_cpu',
-#          r'test_and3d_cpu',
-#          r'test_and4d_cpu',
-#          r'test_and_bcast3v1d_cpu',
-#          r'test_and_bcast3v2d_cpu',
-#          r'test_and_bcast4v2d_cpu',
-#          r'test_and_bcast4v3d_cpu',
-#          r'test_and_bcast4v4d_cpu',
-#          r'test_argmax_default_axis_example_cpu',
-#          r'test_argmax_default_axis_random_cpu',
-#          r'test_argmax_keepdims_example_cpu',
-#          r'test_argmax_keepdims_random_cpu',
-#          r'test_argmax_no_keepdims_example_cpu',
-#          r'test_argmax_no_keepdims_random_cpu',
-#          r'test_argmin_default_axis_example_cpu',
-#          r'test_argmin_default_axis_random_cpu',
-#          r'test_argmin_keepdims_example_cpu',
-#          r'test_argmin_keepdims_random_cpu',
-#          r'test_argmin_no_keepdims_example_cpu',
-#          r'test_argmin_no_keepdims_random_cpu',
-#          r'test_asin_cpu',
-#          r'test_asin_example_cpu',
-# ]
-# for t in tests:
-#   backend_test.exclude(t)
-  # import all test cases at global scope to make them visible to python.unittest
-backend_test.exclude(r'test_a[a-t][a-z,_]*')
 
-globals().update(backend_test.enable_report().test_cases)
+# No support for recurrent operators yet
+backend_test.exclude(r'test_(operator_|)gru_[a-z,_]*')
+backend_test.exclude(r'test_(operator_|)lstm_[a-z,_]*')
+backend_test.exclude(r'test_(operator_|)mvn_[a-z,_]*')
+backend_test.exclude(r'test_[a-z,_]*rnn_[a-z,_]*')
+# No support for reshaping yet
+backend_test.exclude(r'test_(operator_|)expand_[a-z,_]*')
+backend_test.exclude(r'test_(operator_|)tile_[a-z,_]*')
+backend_test.exclude(r'test_reshape_[a-z,_]*')
+backend_test.exclude(r'test_PixelShuffle[a-z,_]*')
+
+# TODO support these
+backend_test.exclude(r'test_(operator_|)top_k_[a-z,_]*')
+backend_test.exclude(r'test_(operator_|)upsample[a-z,_]*')
+backend_test.exclude(r'test_operator_pow[a-z,_]*') # TODO support proper NaNs
+backend_test.exclude(r'test_operator_repeat[a-z,_]*') # TODO support proper NaNs
+
+# backend_test.exclude(r'test_bvlc_alexnet_cpu')
+# backend_test.exclude(r'test_densenet121_cpu')
+# backend_test.exclude(r'test_inception_v1_cpu')
+# backend_test.exclude(r'test_inception_v2_cpu')
+# backend_test.exclude(r'test_resnet50_cpu')
+# backend_test.exclude(r'test_shufflenet_cpu')
+# backend_test.exclude(r'test_squeezenet_cpu')
+# backend_test.exclude(r'test_vgg19_cpu')
+# backend_test.exclude(r'test_zfnet512_cpu')
+
+tests = [
+  "OnnxBackendNodeModelTest",
+  "OnnxBackendPyTorchConvertedModelTest",
+  "OnnxBackendPyTorchOperatorModelTest",
+  "OnnxBackendSimpleModelTest",
+  "OnnxBackendRealModelTest",
+]
+for t in tests:
+  globals().update({t: backend_test.enable_report().test_cases[t]})
 if __name__ == '__main__':
+  unittest.main(verbosity=5, failfast=True)
 
-
-
-
-  unittest.main(verbosity=2, failfast=True)
