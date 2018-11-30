@@ -38,6 +38,10 @@ class CppGenerator:
             for l in self.get_code():
                 f.write(l)
 
+    def debug(self):
+        for l in self.code:
+            print(l)
+
 class NodeGenerator:
     op_type     = ""
     attr_fields = {}
@@ -59,6 +63,9 @@ class NodeGenerator:
         assert(self.__class__ and self.op_type)
         self.alg = alg_generator
         self.alg("// {}".format(self.op_type))
+
+        self.funcref_id = 0
+
         # Find input funcs
         n_ip = len(node.input)
         self.ips = []
@@ -97,20 +104,28 @@ class NodeGenerator:
             else:
                 setattr(self, "{}_".format(attr_name),
                         attr_def)
-
+        self._node = node
         self.pp_attrs()
         self.infer_types()
         self.infer_shapes()
         self.infer_dim_vars()
 
+        for ip in self.ips:
+            self.alg("// -> {} {}{}".format(ip.name, ip.type.c, ip.shape))
+        for op in self.ops:
+            self.alg("// <- {} {}{}".format(op.name, op.type.c, op.shape))
+
+
     def pp_attrs(self):
         pass
 
     def infer_types(self):
-        self.op0.set_type(self.ip0.type)
+        for op in self.ops:
+            op.set_type(self.ip0.type)
 
     def infer_shapes(self):
-        self.op0.set_shape(self.ip0.shape)
+        for op in self.ops:
+            op.set_shape(self.ip0.shape)
 
     def infer_dim_vars(self):
         self.n_dim_vars = self.op0.dims
@@ -126,6 +141,14 @@ class NodeGenerator:
         assert(type(func) == str or len(dim_vars) == func.dims)
         return "{}({})".format(func.name if type(func) == HalideObj else func,
                                ','.join(dim_vars[::-1]))
+
+        r = "{}_{}".format(self.op0.name, self.funcref_id)
+        self.alg("Expr r = {}({});".format(
+            r,
+            func.name if type(func) == HalideObj else func,
+            ','.join(dim_vars[::-1])))
+        self.funcref_id += 1
+        return r
 
     def generate_asn(self, op, ip):
         self.alg("{} = {};".format(op, ip))
@@ -222,6 +245,7 @@ class ClipGenerator(UnaryGenerator):
 class DropoutGenerator(UnaryGenerator):
     op_type = "Dropout"
     expr    = "{}"
+
 
 class EluGenerator(UnaryGenerator):
     op_type = "Elu"
@@ -666,7 +690,7 @@ class ConvGenerator(NodeGenerator):
 
 class BatchNormGenerator(NodeGenerator):
     op_type = "BatchNormalization"
-    attr_fields = {"eps"   : ("epsilon", "f"   , 0),
+    attr_fields = {"eps"   : ("epsilon", "f"   , 1e-5),
                    "eps_t" : ("epsilon", "type", HalogenType.from_c("float"))}
     def pp_attrs(self):
         if type(self.eps_t_) != HalogenType:
@@ -685,22 +709,55 @@ class BatchNormGenerator(NodeGenerator):
         mean_expr = self.generate_funcref(self.mean, [dim_vars[1]])
         var_expr  = self.generate_funcref(self.var, [dim_vars[1]])
         bias_expr = self.generate_funcref(self.bias, [dim_vars[1]])
-        eps_expr  = "Expr({})".format(self.eps_)
-        rhs = self.generate_cast(
-            self.x.type,
-            "{}*({}-{})/sqrt({}+{})+{}".format(
-                s_expr, x_expr, mean_expr, var_expr, eps_expr, bias_expr))
+        eps_expr  = self.generate_cast(self.op0.type, self.eps_)
+        rhs = "{}*(({}-{})/sqrt({}+{}))+{}".format(
+            s_expr, x_expr, mean_expr, var_expr, eps_expr, bias_expr)
         self.generate_asn(lhs, rhs)
         
 class ConcatGenerator(NodeGenerator):
     op_type = "Concat"
     attr_fields = {"axis" : ("axis", "i", 0)}
     def infer_shapes(self):
-        self.op0.set_shape([ip0s + ip1s if i == self.axis_ else ip0s \
-                            for i, (ip0s, ip1s) in \
-                            enumerate(zip(self.ip0.shape, self.ip1.shape))])
+        self.op0.set_shape([sum([ip.shape[i] for ip in self.ips]) \
+                                if i == self.axis_ else self.ip0.shape[i] \
+                            for i in range(self.ip0.dims)])
 
     def generate_alg(self, dim_vars):
+        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+                          "undef<{}>()".format(self.op0.type.c))
+        prev_s = 0
+        for i, ip in enumerate(self.ips):
+            red_var = self.generate_rdom(str(i), [(prev_s, ip.shape[self.axis_])])[0]
+            op_vars = list(dim_vars)
+            op_vars[self.axis_] = red_var
+            ip_vars = list(dim_vars)
+            ip_vars[self.axis_] = "{}-{}".format(red_var, prev_s)
+            prev_s += ip.shape[self.axis_]
+            self.generate_asn(self.generate_funcref(self.op0, op_vars),
+                              self.generate_funcref(ip, ip_vars))
+        return
+        prev_s = 0
+        sel_exprs = []
+        for i, ip in enumerate(self.ips):
+            ip_dim_vars = ["clamp({}-{},0,{})".format(
+                v,
+                prev_s,
+                ip.shape[self.axis_] - 1) \
+                        if i == self.axis_ else v for i, v \
+                        in enumerate(dim_vars)]
+            ip_expr = self.generate_funcref(ip, ip_dim_vars)
+            sel_exprs.append("({0}>={1})&&({0}<{2}),{3}".format(
+                dim_vars[self.axis_], prev_s,
+                prev_s + ip.shape[self.axis_],
+                ip_expr))
+
+            prev_s += ip.shape[self.axis_]
+
+
+        lhs = self.generate_funcref(self.op0, dim_vars)
+        rhs = "select({},0)".format(','.join(sel_exprs))
+        self.generate_asn(lhs, rhs)
+        return
         ip0_dim_vars = ["clamp({},0,{})".format(v,
                                                 self.ip0.shape[self.axis_] - 1) \
                         if i == self.axis_ else v for i, v \

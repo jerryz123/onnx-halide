@@ -156,7 +156,7 @@ class HalideBackendRep(BackendRep):
                                             self.funcs, self.init_data))
             self.hg("//"*10)
         n_dim_vars = max(map(lambda x:x.n_dim_vars, generators))
-        dim_vars = ["d_{}".format(i) for i in range(n_dim_vars)]
+        dim_vars = ["d{}".format(i) for i in range(n_dim_vars)]
         for dim_var in dim_vars:
             dv("Var {};".format(dim_var))
 
@@ -222,16 +222,21 @@ class HalideBackendRep(BackendRep):
         self.sg("}", -1)
         self.sg.write("generated/halogen_c.cpp")
 
+        
+
         cmd  = "g++ -std=c++11 -I {0}/include/ -I {0}/tools/ -g -fno-rtti "
         cmd += "generated/halogen_generator.cpp {0}/tools/GenGen.cpp {0}/lib/libHalide.a "
         cmd += "-o generated/halogen.generator -ldl -lpthread -lz -lrt -ldl -ltinfo -lm"
         cmd = cmd.format(HALIDE_DIR)
         r = subprocess.run(cmd, check=True, shell=True)
 
-        cmd  = "generated/halogen.generator -g halogen -o generated -e "
-        cmd += "assembly,bitcode,h,html,o,static_library,stmt,schedule "
-        cmd += "target=host-strict_float"
+        cmd  = "ulimit -S -s 131072 ; "
+        cmd += "generated/halogen.generator -g halogen -o generated -e "
+        cmd += "h,static_library "
+        cmd += "target=host-strict_float-no_asserts"
+
         r = subprocess.run(cmd, check=True, shell=True)
+
 
         cmd  = "g++ -fPIC -shared -std=c++11 "
         cmd += "-I {0}/include/ -I ./generated/ "
