@@ -1,0 +1,19 @@
+language: python
+python:
+   - "3.6"
+
+addons:
+ apt:
+  packages:
+   - llvm-dev
+
+before_install:
+   - pip install onnx
+
+install:
+   - git clone git@github.com:halide/Halide.git
+   - cd Halide && make distrib
+   - pip install -e .
+
+script:
+   - HALIDE_DIR=Halide/distrib python3 scripts/text_onnx_backend.py
