@@ -1,3 +1,4 @@
+sudo: required
 language: python
 python:
    - "3.6"
@@ -10,14 +11,15 @@ addons:
     packages:
       - llvm-6.0-dev
       - clang-6.0
+      - gcc-5
+      - g++-5
 
 before_install:
    - pip install onnx
 
 install:
-   - git clone https://github.com/halide/Halide.git
-   - cd Halide && LLVM_CONFIG=llvm-config-6.0 make distrib
+   - wget -qO- https://buildbot.halide-lang.org/halide-linux-64-gcc53-trunk-50c8577a045a1da1c670c9c9199cfc0889a7282b.tgz | tar xvz
    - pip install -e .
 
 script:
-   - HALIDE_DIR=Halide/distrib python3 scripts/text_onnx_backend.py
+   - HALIDE_DIR=halide python3 scripts/test_onnx_backend.py
