@@ -141,7 +141,7 @@ class HalideBackendRep(BackendRep):
         # Generate the Halide compute function
         self.hg()
         self.hg("void generate() {", 1);
-        self.hg("get_target().set_feature(Target::StrictFloat);")
+
         for ip in input_scalars:
             self.hg("Func {};".format(ip.name))
             self.hg("{}() = {}_s;".format(
@@ -224,7 +224,7 @@ class HalideBackendRep(BackendRep):
 
         
 
-        cmd  = "g++ -std=c++11 -I {0}/include/ -I {0}/tools/ -g -fno-rtti "
+        cmd  = "g++ -std=c++11 -fPIC -I {0}/include/ -I {0}/tools/ -g -fno-rtti "
         cmd += "generated/halogen_generator.cpp {0}/tools/GenGen.cpp {0}/lib/libHalide.a "
         cmd += "-o generated/halogen.generator -ldl -lpthread -lz -lrt -ldl -ltinfo -lm"
         cmd = cmd.format(HALIDE_DIR)
@@ -233,7 +233,7 @@ class HalideBackendRep(BackendRep):
         cmd  = "ulimit -S -s 131072 ; "
         cmd += "generated/halogen.generator -g halogen -o generated -e "
         cmd += "h,static_library "
-        cmd += "target=host-strict_float-no_asserts"
+        cmd += "target=host-no_asserts"
 
         r = subprocess.run(cmd, check=True, shell=True)
 
