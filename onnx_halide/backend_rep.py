@@ -7,6 +7,7 @@ import numpy as np
 import importlib
 import os
 from math import floor, ceil
+
 from .tensortypes import HalogenType, HalideObj
 from .generators import NodeGenerator, CppGenerator
 
@@ -16,6 +17,11 @@ if "HALIDE_DIR" in os.environ:
     HALIDE_DIR = os.environ['HALIDE_DIR']
 else:
     HALIDE_DIR = "/usr/local"
+
+if "CXX" in os.environ:
+    CXX = os.environ['CXX']
+else:
+    CXX = "g++"
 
 JOIN_VARS = lambda vars: ','.join(vars[::-1])
 
@@ -38,11 +44,15 @@ class HalideBackendRep(BackendRep):
         GLOBAL_LIDX += 1
         self.hg = CppGenerator()
         self.sg = CppGenerator()
+        self.dest_folder = "generated"
+        if not os.path.exists(self.dest_folder):
+            os.makedirs(self.dest_folder)
         self.generate_csrc(model)
 
     def __del__(self):
         try:
-            os.remove("generated/lib{}.so".format(self.model_name))
+            os.remove("{}/lib{}.so".format(self.dest_folder,
+                                           self.model_name))
         except FileNotFoundError:
             pass
 
@@ -74,7 +84,6 @@ class HalideBackendRep(BackendRep):
                 args.append(op.ctypes.data_as(ctype))
                 outputs.append(op)
         self.halide_fn(*args)
-
         return outputs
 
 
@@ -177,7 +186,7 @@ class HalideBackendRep(BackendRep):
         self.hg("}", -1)
         self.hg("HALIDE_REGISTER_GENERATOR(HalOGen, halogen)")
 
-        self.hg.write("generated/halogen_generator.cpp")
+        self.hg.write("{}/halogen_generator.cpp".format(self.dest_folder))
 
         # Generate C shim to Halide generated code
         self.halogen_str = """"""
@@ -220,33 +229,39 @@ class HalideBackendRep(BackendRep):
         self.sg("return r;")
         self.sg("}", -1)
         self.sg("}", -1)
-        self.sg.write("generated/halogen_c.cpp")
+        self.sg.write("{}/halogen_c.cpp".format(self.dest_folder))
 
         
 
-        cmd  = "g++ -std=c++11 -fPIC -I {0}/include/ -I {0}/tools/ -g -fno-rtti "
-        cmd += "generated/halogen_generator.cpp {0}/tools/GenGen.cpp {0}/lib/libHalide.a "
-        cmd += "-o generated/halogen.generator -ldl -lpthread -lz -lrt -ldl -ltinfo -lm"
-        cmd = cmd.format(HALIDE_DIR)
+        cmd  = "{2} -std=c++11 -fPIC -fpie "
+        cmd += "-I {0}/include/ -I {0}/tools/ "
+        cmd += "-g -fno-rtti "
+        cmd += "{1}/halogen_generator.cpp {0}/tools/GenGen.cpp "
+        cmd += "{0}/lib/libHalide.a "
+        cmd += "-o {1}/halogen.generator -ldl -lpthread -lz "
+        cmd += "-lrt -ldl -ltinfo -lm"
+        cmd  = cmd.format(HALIDE_DIR, self.dest_folder, CXX)
         r = subprocess.run(cmd, check=True, shell=True)
 
         cmd  = "ulimit -S -s 131072 ; "
-        cmd += "generated/halogen.generator -g halogen -o generated -e "
+        cmd += "{0}/halogen.generator -g halogen -o {0} -e "
         cmd += "h,static_library "
         cmd += "target=host-no_asserts"
-
+        cmd  = cmd.format(self.dest_folder)
         r = subprocess.run(cmd, check=True, shell=True)
 
 
-        cmd  = "g++ -fPIC -shared -std=c++11 "
-        cmd += "-I {0}/include/ -I ./generated/ "
-        cmd += "generated/halogen_c.cpp generated/halogen.a "
+        cmd  = "{3} -fPIC -shared -std=c++11 "
+        cmd += "-I {0}/include/ -I ./{2}/ "
+        cmd += "{2}/halogen_c.cpp {2}/halogen.a "
         cmd += "{0}/lib/libHalide.a "
-        cmd += "-o generated/lib{1}.so -ltinfo"
-        cmd  = cmd.format(HALIDE_DIR, self.model_name)
+        cmd += "-o {2}/lib{1}.so -ltinfo"
+        cmd  = cmd.format(HALIDE_DIR, self.model_name,
+                          self.dest_folder, CXX)
         r = subprocess.run(cmd, check=True, shell=True)
 
-        self.halolib = ctypes.CDLL("generated/lib{}.so".format(
+        self.halolib = ctypes.CDLL("{}/lib{}.so".format(
+            self.dest_folder,
             self.model_name))
         self.halide_fn = self.halolib.halogen_c
         argtypes = [self.funcs[name].type.ct_ptr \

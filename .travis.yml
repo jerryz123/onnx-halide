@@ -11,8 +11,11 @@ addons:
     packages:
       - llvm-6.0-dev
       - clang-6.0
-      - gcc-5
-      - g++-5
+      - gcc-7
+      - g++-7
+env:
+  global:
+      - CXX="g++-7 -v" CC=gcc-7
 
 before_install:
    - pip install onnx
