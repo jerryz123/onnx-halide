@@ -135,7 +135,7 @@ class NodeGenerator:
 
     def generate_sched(self):
         for op in self.ops:
-            self.sch("{}.compute_root();".format(op.name))
+            self.generate_compute_root(op)
 
     def generate_funcref(self, func, dim_vars):
         assert(type(func) == str or len(dim_vars) == func.dims)
@@ -150,7 +150,18 @@ class NodeGenerator:
         self.funcref_id += 1
         return r
 
-    def generate_asn(self, op, ip):
+    def generate_compute_root(self, func):
+        if not func.is_input:
+            self.sch("{}.compute_root();".format(func.name))
+
+    def generate_asn(self, op, op_vars, ip):
+        self.alg("{} = {};".format(
+            self.generate_funcref(op, op_vars),
+            ip
+        ))
+        op.set_dim_vars(op_vars)
+        
+    def generate_asn1(self, op, ip):
         self.alg("{} = {};".format(op, ip))
 
     def generate_funcdecl(self, name, rhs=""):
@@ -183,11 +194,9 @@ class NodeGenerator:
 class UnaryGenerator(NodeGenerator):
     def generate_alg(self, dim_vars):
         ip0_expr  = self.generate_funcref(self.ip0,
-                                          dim_vars[:self.ip0.dims])
-        op0_expr  = self.generate_funcref(self.op0,
-                                          dim_vars[:self.ip0.dims])
+                                          dim_vars)
         unop_expr = self.expr.format(ip0_expr)
-        self.generate_asn(op0_expr, unop_expr)
+        self.generate_asn(self.op0, dim_vars, unop_expr)
 
 
 class AbsGenerator(UnaryGenerator):
@@ -375,7 +384,7 @@ class BinaryGenerator(NodeGenerator):
         expr         = self.expr.format(ip0_expr, ip1_expr)
 
         op0_expr     = self.generate_funcref(self.op0, dim_vars)
-        self.generate_asn(op0_expr, expr)
+        self.generate_asn1(op0_expr, expr)
 
 class AddGenerator(BinaryGenerator):
     op_type = "Add"
@@ -461,7 +470,7 @@ class ArgMGenerator(NodeGenerator):
 
         expr = "{}({})[0]".format(self.argm_type, ip_expr)
         expr = self.generate_cast(self.op0.type, expr)
-        self.generate_asn(op_expr, expr)
+        self.generate_asn1(op_expr, expr)
 
 class ArgMaxGenerator(ArgMGenerator):
     op_type   = "ArgMax"
@@ -539,7 +548,7 @@ class PoolGenerator(NodeGenerator):
         rhs = self.generate_pool_rhs(dim_vars, red_vars, ip_vars,
                                      self.generate_funcref(padded,
                                                            ip_vars))
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
 
 class AveragePoolGenerator(PoolGenerator):
     op_type   = "AveragePool"
@@ -554,7 +563,7 @@ class AveragePoolGenerator(PoolGenerator):
             count_rhs = np.prod(self.pool_shape_)
         else:
             ones_func = self.generate_funcdecl("ones")
-            self.generate_asn(
+            self.generate_asn1(
                 self.generate_funcref(ones_func,
                                       count_vars),
                 "1")
@@ -566,7 +575,7 @@ class AveragePoolGenerator(PoolGenerator):
             pad_ones_expr = self.generate_funcref(padded_ones,
                                                   ip_vars[-len(red_vars):])
             count_rhs = "sum({})".format(pad_ones_expr)
-        self.generate_asn(count_expr, count_rhs)
+        self.generate_asn1(count_expr, count_rhs)
         rhs_expr = "sum({}) / {}".format(
             padded_expr,
             self.generate_funcref(
@@ -598,7 +607,7 @@ class MaxPoolGenerator(PoolGenerator):
     def generate_pool_rhs(self, dim_vars, red_vars, ip_vars, padded_expr):
         if self.has_id_:
             maxed = self.generate_funcdecl("maxed")
-            self.generate_asn(self.generate_funcref(maxed, dim_vars),
+            self.generate_asn1(self.generate_funcref(maxed, dim_vars),
                               "argmax({})".format(padded_expr))
             prod = self.ip0.shape[::-1]
             prod = [int(np.prod(prod[:i])) for i in range(len(prod))]
@@ -615,7 +624,7 @@ class MaxPoolGenerator(PoolGenerator):
                                   [{}]*self.n_ign_dims_ + self.strides_,
                                   [{}]*self.n_ign_dims_ + self.pads_,
                                   prod[::-1]))]
-            self.generate_asn(self.generate_funcref(self.op1,
+            self.generate_asn1(self.generate_funcref(self.op1,
                                                     dim_vars),
                               self.generate_cast(self.op1.type,
                                                  "+".join(maxed_vars)))
@@ -684,9 +693,13 @@ class ConvGenerator(NodeGenerator):
 
         w_expr = self.generate_funcref(self.w, w_vars)
 
-        lhs = self.generate_funcref(self.op0, dim_vars)
+#        lhs = self.generate_funcref(self.op0, dim_vars)
         rhs = "sum({}*{})+{}".format(padded_expr, w_expr, bias_expr)
-        self.generate_asn(lhs, rhs)
+        self.generate_asn(self.op0, dim_vars, rhs)
+
+    # def generate_sched(self):
+    #     for ip in self.ips:
+    #         self.generate_compute_root(ip)
 
 class BatchNormGenerator(NodeGenerator):
     op_type = "BatchNormalization"
@@ -712,7 +725,7 @@ class BatchNormGenerator(NodeGenerator):
         eps_expr  = self.generate_cast(self.op0.type, self.eps_)
         rhs = "{}*(({}-{})/sqrt({}+{}))+{}".format(
             s_expr, x_expr, mean_expr, var_expr, eps_expr, bias_expr)
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
         
 class ConcatGenerator(NodeGenerator):
     op_type = "Concat"
@@ -723,7 +736,7 @@ class ConcatGenerator(NodeGenerator):
                             for i in range(self.ip0.dims)])
 
     def generate_alg(self, dim_vars):
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           "undef<{}>()".format(self.op0.type.c))
         prev_s = 0
         for i, ip in enumerate(self.ips):
@@ -733,7 +746,7 @@ class ConcatGenerator(NodeGenerator):
             ip_vars = list(dim_vars)
             ip_vars[self.axis_] = "{}-{}".format(red_var, prev_s)
             prev_s += ip.shape[self.axis_]
-            self.generate_asn(self.generate_funcref(self.op0, op_vars),
+            self.generate_asn1(self.generate_funcref(self.op0, op_vars),
                               self.generate_funcref(ip, ip_vars))
         return
         prev_s = 0
@@ -756,7 +769,7 @@ class ConcatGenerator(NodeGenerator):
 
         lhs = self.generate_funcref(self.op0, dim_vars)
         rhs = "select({},0)".format(','.join(sel_exprs))
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
         return
         ip0_dim_vars = ["clamp({},0,{})".format(v,
                                                 self.ip0.shape[self.axis_] - 1) \
@@ -774,7 +787,7 @@ class ConcatGenerator(NodeGenerator):
         rhs = "select({}<{},{},{})".format(
             dim_vars[self.axis_], self.ip0.shape[self.axis_],
             ip0_expr, ip1_expr)
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
 
 class ConstantGenerator(NodeGenerator):
     op_type = "Constant"
@@ -809,7 +822,7 @@ class ConstantGenerator(NodeGenerator):
                 ",".join(map(str, self.op0.shape[::-1]))))
             rhs = self.generate_funcref("{0}_b".format(self.op0.name),
                                         dim_vars)
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
 
 class PadGenerator(NodeGenerator):
     op_type = "Pad"
@@ -844,7 +857,7 @@ class PadGenerator(NodeGenerator):
                 self.ip0.name,
                 ",".join(["{{0,{}}}".format(ips) if ips > 1 else "{Expr(),Expr()}"\
                           for ips in self.ip0.shape[::-1]]))
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
 
         ip_vars = ["{}-{}".format(dv, pad[0]) if pad else dv \
                    for dv, pad in zip(dim_vars, [{}]*self.n_ign_dims_+self.pads_)]
@@ -852,7 +865,7 @@ class PadGenerator(NodeGenerator):
         op_expr = self.generate_funcref(self.op0, dim_vars)
         ip_expr = self.generate_funcref("{}_pad".format(self.op0.name),
                                         ip_vars)
-        self.generate_asn(op_expr, ip_expr)
+        self.generate_asn1(op_expr, ip_expr)
 
 class ConvTGenerator(NodeGenerator):
     op_type     = "ConvTranspose"
@@ -918,7 +931,7 @@ class ConvTGenerator(NodeGenerator):
         dilated_rhs = "select({}, {}, 0)".format(
             "&&".join(dilated_cond),
             self.generate_funcref(pad_w, dim_vars[:2] + dilated_w_vars))
-        self.generate_asn(dilated_lhs, dilated_rhs)
+        self.generate_asn1(dilated_lhs, dilated_rhs)
 
         ip_vars = [dim_vars[0], red_vars[0]] + \
                   ["cast<int>(floor(({0}-{4}*{5}+{2})/{1}))".format(dv, st, pad[0], op_pad, rv, dil) \
@@ -956,7 +969,7 @@ class ConvTGenerator(NodeGenerator):
             self.generate_funcref(pad_i, ip_vars),
             self.generate_funcref(dilated, w_vars),
             bias_expr)
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
         
 class DToSGenerator(NodeGenerator):
     op_type = "DepthToSpace"
@@ -980,7 +993,7 @@ class DToSGenerator(NodeGenerator):
                    "cast<int>({}/{})".format(
                        dim_vars[3],
                        self.blocksize_)]
-        self.generate_asn(self.generate_funcref(self.op0,
+        self.generate_asn1(self.generate_funcref(self.op0,
                                                 dim_vars),
                           self.generate_funcref(self.ip0,
                                                 ip_vars))
@@ -1015,7 +1028,7 @@ class FlattenGenerator(NodeGenerator):
                        for ips, prod in zip(
                           pprevs,
                           pprods[1:])]
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.generate_funcref(self.ip0, ip_vars))
 
 class GatherGenerator(NodeGenerator):
@@ -1032,7 +1045,7 @@ class GatherGenerator(NodeGenerator):
                       self.generate_funcref(self.ip1, id_vars),
                       self.ip0.shape[self.axis_]-1)] \
                   + dim_vars[self.ip1.dims+self.axis_:]
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.generate_funcref(self.ip0, ip_vars))
 
 class GemmGenerator(NodeGenerator):
@@ -1066,21 +1079,21 @@ class GemmGenerator(NodeGenerator):
         norm_B = self.generate_funcdecl("norm_B")
         norm_C = self.generate_funcdecl("norm_C")
         if self.transA_:
-            self.generate_asn(self.generate_funcref(norm_A, dim_vars[:2]),
+            self.generate_asn1(self.generate_funcref(norm_A, dim_vars[:2]),
                               self.generate_funcref(self.A, dim_vars[:2][::-1]))
         else:
-            self.generate_asn(norm_A, self.A.name)
+            self.generate_asn1(norm_A, self.A.name)
         if self.transB_:
-            self.generate_asn(self.generate_funcref(norm_B, dim_vars[:2]),
+            self.generate_asn1(self.generate_funcref(norm_B, dim_vars[:2]),
                               self.generate_funcref(self.B, dim_vars[:2][::-1]))
         else:
-            self.generate_asn(norm_B, self.B.name)
-        self.generate_asn(self.generate_funcref(norm_C, dim_vars),
+            self.generate_asn1(norm_B, self.B.name)
+        self.generate_asn1(self.generate_funcref(norm_C, dim_vars),
                           self.generate_funcref(self.C, [dv if cs > 1 else "0" \
                                                          for dv, cs \
                                                          in zip(dim_vars[::-1],
                                                                 self.C.shape[::-1])][::-1]))
-        self.generate_asn(self.generate_funcref(self.Y, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.Y, dim_vars),
                           "{}*{}+{}*sum({}*{})".format(
                               beta,
                               self.generate_funcref(norm_C, dim_vars),
@@ -1097,7 +1110,7 @@ class FeaturemaxGenerator(NodeGenerator):
 
         lhs = self.generate_funcref(self.op0, dim_vars)
         rhs = self.generate_rhs(dim_vars, ip_vars, red_vars)
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
 
 class HardmaxGenerator(FeaturemaxGenerator):
     op_type = "Hardmax"
@@ -1116,7 +1129,7 @@ class LogSoftmaxGenerator(FeaturemaxGenerator):
     op_type = "LogSoftmax"
     def generate_rhs(self, dim_vars, ip_vars, red_vars):
         norm_ip = self.generate_funcdecl("norm_ip")
-        self.generate_asn(self.generate_funcref(norm_ip, dim_vars),
+        self.generate_asn1(self.generate_funcref(norm_ip, dim_vars),
                           "{}-maximum({})".format(
                               self.generate_funcref(self.ip0, dim_vars),
                               self.generate_funcref(self.ip0, ip_vars)))
@@ -1128,11 +1141,11 @@ class SoftmaxGenerator(FeaturemaxGenerator):
     op_type = "Softmax"
     def generate_rhs(self, dim_vars, ip_vars, red_vars):
         max_x = self.generate_funcdecl("max_x")
-        self.generate_asn(self.generate_funcref(max_x, dim_vars),
+        self.generate_asn1(self.generate_funcref(max_x, dim_vars),
                           "maximum({})".format(self.generate_funcref(
                               self.ip0, ip_vars)))
         exp_x = self.generate_funcdecl("exp_x")
-        self.generate_asn(self.generate_funcref(exp_x, dim_vars),
+        self.generate_asn1(self.generate_funcref(exp_x, dim_vars),
                           "exp({}-{})".format(
                               self.generate_funcref(self.ip0, dim_vars),
                               self.generate_funcref(max_x, dim_vars)))
@@ -1148,19 +1161,19 @@ class InstanceNormGenerator(NodeGenerator):
         eps = self.generate_cast(self.op0.type, "Expr({})".format(self.eps_))
 
         mean_f = self.generate_funcdecl("mean_f")
-        self.generate_asn(self.generate_funcref(mean_f, dim_vars[:2]),
+        self.generate_asn1(self.generate_funcref(mean_f, dim_vars[:2]),
                           "sum({})/{}".format(
                               self.generate_funcref(self.ip0, dim_vars[:2] + red_vars),
                               np.prod(self.ip0.shape[2:])))
 
         var_f = self.generate_funcdecl("var_f")
-        self.generate_asn(self.generate_funcref(var_f, dim_vars[:2]),
+        self.generate_asn1(self.generate_funcref(var_f, dim_vars[:2]),
                           "(sum(pow({},2))/{} - pow({},2))".format(
                               self.generate_funcref(self.ip0, dim_vars[:2] + red_vars),
                               np.prod(self.ip0.shape[2:]),
                               self.generate_funcref(mean_f, dim_vars[:2])))
 
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           "({}*({}-{})/(sqrt({}+{}))+{})".format(
                               self.generate_funcref(self.ip1, [dim_vars[1]]),
                               self.generate_funcref(self.ip0, dim_vars),
@@ -1185,7 +1198,7 @@ class LRNGenerator(NodeGenerator):
                                        (0, self.ip0.shape[1]) for i in \
                                        range(self.ip0.dims)])
         sq_sum = self.generate_funcdecl("sq_sum")
-        self.generate_asn(self.generate_funcref(sq_sum, dim_vars),
+        self.generate_asn1(self.generate_funcref(sq_sum, dim_vars),
                           "sum(pow({},2))".format(
                               self.generate_funcref(
                                   padded,
@@ -1193,7 +1206,7 @@ class LRNGenerator(NodeGenerator):
                                    "{}+{}".format(red_var, dim_vars[1])] \
                                    + dim_vars[2:])))
 
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           "{}/pow({}+({}/{})*{},{})".format(
                               self.generate_funcref(self.ip0, dim_vars),
                               self.generate_cast(self.op0.type, self.bias_),
@@ -1234,7 +1247,7 @@ class MatMulGenerator(NodeGenerator):
             a_vars = dim_vars[:-1] + [red_var]
             b_vars = dim_vars[:-2] + [red_var, dim_vars[-1]]
 
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           "sum({}*{})".format(
                               self.generate_funcref(self.ip0, a_vars),
                               self.generate_funcref(self.ip1, b_vars)))
@@ -1262,7 +1275,7 @@ class VarGenerator(NodeGenerator):
                 ip_vars.append([(dv if dim > 1 else "0") for dim, dv in\
                                 zip(ip.shape, dim_vars[-ip.dims:])])
             rhs = self.generate_rhs(dim_vars, ip_vars)
-        self.generate_asn(lhs, rhs)
+        self.generate_asn1(lhs, rhs)
 
 class MinMaxGenerator(VarGenerator):
     def generate_rhs(self, dim_vars, ip_vars):
@@ -1299,7 +1312,7 @@ class PReluGenerator(NodeGenerator):
         ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in\
                         zip(self.ip1.shape[::-1], dim_vars[::-1][i:])][::-1]
 
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           "select({0}<0,{0}*{1},{0})".format(
                               self.generate_funcref(self.ip0, dim_vars),
                               self.generate_funcref(self.ip1, ip1_dim_vars)))
@@ -1337,7 +1350,7 @@ class RedlGenerator(NodeGenerator):
         for i, dv in zd_vars:
             ip_vars[i] = dv
 
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.expr.format(self.generate_funcref(self.ip0,
                                                                  ip_vars)))
 
@@ -1401,7 +1414,7 @@ class ShapeGenerator(NodeGenerator):
             self.ip0.dims))
         self.alg("Func {0}_fb({0}_b);".format(
             self.op0.name))
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.generate_funcref("{}_fb".format(self.op0.name),
                                                 dim_vars))
 
@@ -1412,7 +1425,7 @@ class SizeGenerator(NodeGenerator):
     def infer_types(self):
         self.op0.set_type(HalogenType.from_c("int64_t"))
     def generate_alg(self, dim_vars):
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.generate_cast(self.op0.type, self.ip0.size))
 
 class SliceGenerator(NodeGenerator):
@@ -1434,7 +1447,7 @@ class SliceGenerator(NodeGenerator):
             self.st_dict_[i] = s
         self.op0.set_shape(op_shape)
     def generate_alg(self, dim_vars):
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.generate_funcref(self.ip0,
                                                 ["{}+{}".format(dv,
                                                                 self.st_dict_[i]) \
@@ -1462,7 +1475,7 @@ class SplitGenerator(NodeGenerator):
         for op, s in zip(self.ops, self.split_):
             ip_vars = list(dim_vars)
             ip_vars[self.axis_] += "+{}".format(s_sum)
-            self.generate_asn(self.generate_funcref(op, dim_vars),
+            self.generate_asn1(self.generate_funcref(op, dim_vars),
                               self.generate_funcref(self.ip0, ip_vars))
             s_sum += s
         
@@ -1478,7 +1491,7 @@ class SqueezeGenerator(NodeGenerator):
                           if i not in self.axes_],
                          dim_vars):
             ip_vars[i] = dv
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.generate_funcref(self.ip0, ip_vars))
 
 class TransposeGenerator(NodeGenerator):
@@ -1489,7 +1502,7 @@ class TransposeGenerator(NodeGenerator):
     def infer_shapes(self):
         self.op0.set_shape([self.ip0.shape[i] for i in self.perms_])
     def generate_alg(self, dim_vars):
-        self.generate_asn(self.generate_funcref(self.op0,
+        self.generate_asn1(self.generate_funcref(self.op0,
                                                 [dim_vars[i] for i in self.perms_]),
                           self.generate_funcref(self.ip0, dim_vars))
 
@@ -1505,7 +1518,7 @@ class UnsqueezeGenerator(NodeGenerator):
         self.op0.set_shape(op_shape)
     def generate_alg(self, dim_vars):
         ip_vars = [dv for i, dv in enumerate(dim_vars) if self.orig_s_[i]]
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.generate_funcref(self.ip0, ip_vars))
             
 class ReshapeGenerator(NodeGenerator):
@@ -1522,11 +1535,11 @@ class ReshapeGenerator(NodeGenerator):
                    zip(self.ip0.shape, prods)]
 
         flattened = self.generate_funcdecl("flattened")
-        self.generate_asn(self.generate_funcref(flattened, [dim_vars[0]]),
+        self.generate_asn1(self.generate_funcref(flattened, [dim_vars[0]]),
                           self.generate_funcref(self.ip0, ip_vars))
         prevs = self.op0.shape[1:] + [1]
         prods = [np.prod(prevs[i:]) for i in range(len(prevs))]
 
         fl_vars = ["({}*{})".format(dv, p) for dv, p in zip(dim_vars, prods)]
-        self.generate_asn(self.generate_funcref(self.op0, dim_vars),
+        self.generate_asn1(self.generate_funcref(self.op0, dim_vars),
                           self.generate_funcref(flattened, ["+".join(fl_vars)]))

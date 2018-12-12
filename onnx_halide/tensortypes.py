@@ -41,12 +41,17 @@ for ts in TYPE_MAP:
 
 class HalideObj:
     def __init__(self, name=None, shape=-1, type=None, io=0):
-        self._name = name
+        self._name  = name
         self._shape = -1 if shape == -1 else \
                       tuple([int(i) for i in shape])
-        self._type = type
-        self._io = io
+        self._type  = type
+        self._io    = io
+        self._dim_vars = None
 
+    @property
+    def dim_vars(self):
+        assert(self._dim_vars)
+        return self._dim_vars
     @property
     def name(self):
         assert(self._name)
@@ -71,13 +76,17 @@ class HalideObj:
         return self._type
     @property
     def is_input(self):
-        assert(self._io != 0)
+#        assert(self._io != 0)
         return self._io == 1
     @property
     def is_output(self):
         assert(self._io != 0)
         return self._io == -1
 
+    def set_dim_vars(self, vars):
+        assert(len(vars) == self.dims)
+        assert(not self._dim_vars)
+        self._dim_vars = vars
     def set_shape(self, shape):
         assert(all([type(i) == int for i in shape]))
 

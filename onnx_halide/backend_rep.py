@@ -2,19 +2,17 @@ from onnx.backend.base import BackendRep
 from onnx import TensorProto, shape_inference
 import subprocess
 import ctypes
-import _ctypes
 import numpy as np
-import importlib
+import time
 import os
-from math import floor, ceil
 
 from .tensortypes import HalogenType, HalideObj
 from .generators import NodeGenerator, CppGenerator
 
 
 GLOBAL_LIDX = 1 # Hack to avoid library naming collisions
-if "HALIDE_DIR" in os.environ:
-    HALIDE_DIR = os.environ['HALIDE_DIR']
+if "HALIDE_ROOT_DIR" in os.environ:
+    HALIDE_DIR = os.environ['HALIDE_ROOT_DIR']
 else:
     HALIDE_DIR = "/usr/local"
 
@@ -24,13 +22,6 @@ else:
     CXX = "g++"
 
 JOIN_VARS = lambda vars: ','.join(vars[::-1])
-
-CAST = lambda expr, type: "cast<{}>(Expr({}))".format(type, expr)
-
-def is_loaded(lib):
-    libp = os.path.abspath(lib)
-    ret = os.system("lsof -w -p %d | grep %s > /dev/null" % (os.getpid(), libp))
-    return ret == 0
 
 class HalideBackendRep(BackendRep):
     def __init__(self, model):
@@ -83,7 +74,9 @@ class HalideBackendRep(BackendRep):
                     op = np.zeros(func.shape, dtype=func.type.np)
                 args.append(op.ctypes.data_as(ctype))
                 outputs.append(op)
+
         self.halide_fn(*args)
+
         return outputs
 
 
@@ -233,7 +226,7 @@ class HalideBackendRep(BackendRep):
 
         
 
-        cmd  = "{2} -std=c++11 -fPIC -fpie "
+        cmd  = "{2} -std=c++11 "
         cmd += "-I {0}/include/ -I {0}/tools/ "
         cmd += "-g -fno-rtti "
         cmd += "{1}/halogen_generator.cpp {0}/tools/GenGen.cpp "
