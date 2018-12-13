@@ -68,10 +68,112 @@ While it is possible to use this tool end-to-end in only Python, the intermediat
 `halogen.a` and `halogen.h` is the static library with the generated Halide pipeline output by `halogen.generator`. The end-to-end system compiles these into a shared library so they can be linked into Python. However, the library can be linked with by any C code, and the generated function as defined in `halogen.h` can be called.
 
 ## Design
+This section serves to document some of the design decisions that went into the current iteration of the generator, and also to provide some guidelines for implementing future ONNX operators.
+
 ### Procedure
+In the `HalideBackendRep` class, the following procedure is carried out over the ONNX graph to generate the Halide generator source code.
+
+1. For every input Tensor of the graph, record its name, type, and shape in a `HalideObj`.
+2. For every output Tensor of the graph, record its name, type, and shape in a `HalideObj`.
+3. For every intermediate Tensor of the graph, record its name in a `HalideObj`. Now the collection of `HalideObj` contains all Funcs which may be used in the pipeline.
+4. For every operator in the graph, infer the types and shapes of its output tensors, if they have not already been defined.
+5. For every operator in the graph, generate the algorithm code
+
+
 ### Operator Generators
+ONNX operator nodes have a one-to-one correspondence with `NodeGenerators` in this utility. The `NodeGenerator` is responsible for decoding the ONNX operator's attributes, inferring the types and shapes of it's output tensors, and generating the algorithm and scheduling code for that specific operator. The base definition of this class is as below:
+```
+class NodeGenerator:
+  op_type     = "NONE"
+  attr_fields = {}
+  def infer_types(self):
+    for op in self.ops:
+      op.set_type(self.ip0.type)
+  def infer_shapes(self):
+    for op in self.ops:
+      op.set_shape(self.ip0.shape)
+  def generate_alg(self, dim_vars):
+    raise NotImplementedError
+  def generate_sched(self):
+    for op in self.ops:
+      self.generate_compute_root(op)
+```
+Child classes are meant to override these functions and attributes. For example, consider the `GEMMGenerator`
+```
+class GemmGenerator(NodeGenerator):
+    op_type = "Gemm"
+    attr_fields = {"alpha" :("alpha","f",1),
+                   "beta"  :("beta","f",1),
+                   "transA":("transA","i",0),
+                   "transB":("transB","i",0)}
+    def infer_shapes(self):
+        self.Y.set_shape([self.M_, self.N_])
+    def generate_alg(self, dim_vars):
+      ...
+```
+Setting `op_type = "Gemm"` will associate this `NodeGenerator` with all Gemm operators in the ONNX model. The operator attributes here `alpha, beta, transA, transB`, are described as part of the ONNX node, and their defaults are presented here.
+Type inference is the same as the base class, but shape inference is different, since the output tensor shape is not the same as the input tensor shape. The algorithm generation code is also specified.
+
 ### Type and Shape Inference
+The type of the output tensor is almost always the type of the input tensor, except for very specific operators, like Cast, ArgMax/Min, Shape, and BinOps.
+
+Shape inference is typically tricker, due to the availability of multi-dimensional broadcasting for certain classes of operators. For instance, a tensor of shape [1, 3, 5] can be added to a tensor of shape [2, 3, 1] to output a tensor of shape [2, 3, 5]. The output shape must for these operators be carefully determined from the input shapes.
+
+In any case, the output shape and type are set in `HalideObj.set_shape(shape)` and `HalideObj.set_type(type)`. For both methods, two checks are performed.
+ - A `HalideObj` can only have its type and shape set once during code generation.
+ - If a `HalideObj` is an output Func with its type and shape pre-specified, the inferred type and shape must match what was specified. This validates the type and shape inference.
+
 ### Algorithm Generation
+`NodeGenerator.generate_alg(dim_vars:list of var)` generates `cpp` source code for one instance of an operator. `dim_vars` represent the Halide Vars used to index the output Func. These are passed in from the top to avoid having to instantiate a new set of Vars for every node in the graph.
+
+Generating the algorithms typically follows a common pattern. The output Func, indexed using the `dim_vars` is assigned some expression of input Funcs indexed using a combination of `dim_vars`, reduction variables, and constants. The majority of the work is determining the right hand expression and the expressions used to index into input Funcs. 
+
+Some useful helper generators include:
+ - `NodeGenerator.generate_rdom(name:str, extents:list of (int, int)) -> list of var`
+    
+    This function generates a reduction domain over the given extents, and returns a list of reduction variables.
+    
+ - `NodeGenerator.generate_funcref(func:HalideObj, dim_vars:list of var) -> expr`
+    
+    This function generates an expression that is indexing into a function, i.e. `f(d1, d0)`.
+
+ - `NodeGenerator.generate_asn(op:HalideObj, op_vars:list of var, ip:expr)`
+
+    This function generates the assignment `op(*op_vars) = ip`.
+    
+**Note: Although Halide dimensions are reversed compared to Numpy dimensions, this generator uses Numpy-style shapes, and the reversal of index variables happens without manual intervention. This explains why generated expressions will display reversed variables, as in `f(d3, d2, d1, d0)`.**
+
+As an example, consider the MatMul operator, in the case with no broadcasting.
+```
+    def generate_alg(self, dim_vars):
+        K = self.ip0.shape[-1]
+        red_var = self.generate_rdom("r", [(0, K)])[0]
+        a_vars  = [dim_vars[0], red_var]
+        b_vars  = [red_var, dim_vars[1]]
+        op_expr = "sum({}*{})".format(
+                     self.generate_funcref(self.ip0, a_vars),
+                     self.generate_funcref(self.ip1, b_vars))
+        self.generate_asn(self.op0, dim_vars, op_expr)
+```
+Here, we get the reduction variable over the K dimension, and create sets of indices into the input A and B arrays.
+The output expression is then a reduced sum over a multiply between the input expressions.
+If the Tensors were `A, B, C`, and the `dim_vars` were `[d0, d1]`, and the `K` dimension had size `10`, the output code would be:
+```
+RDom r(0, 10);
+C(d1, d0) = sum(A(r[0], d0) * B(d1, r[0]));
+```
+### Operator Categories
+
+#### Unary Operators
+#### Binary Operators
+#### Pooling
+#### FeatureMax
+#### Dimension Pooling
+#### Reductions
+#### Reshaping
 ### Schedule Generation
 
 ## To-do
+### Dynamic shapes
+### Schedule generation
+### Halide integration
