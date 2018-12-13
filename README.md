@@ -163,17 +163,34 @@ RDom r(0, 10);
 C(d1, d0) = sum(A(r[0], d0) * B(d1, r[0]));
 ```
 ### Operator Categories
-
+Some of the ONNX operators fall into categories. These categories roughly correspond to the `NodeGenerator` class hierarchy.
 #### Unary Operators
+Unary operators are very simple, with only one input Tensor, and trivial shape inference. These cover the class of activation functions
 #### Binary Operators
+Binary operators represent operators between two Tensors that support broadcasting. The shape inference for broadcasting is interesting.
+```
+    def infer_shapes(self):
+        dims = max(self.ip0.dims, self.ip1.dims)
+        self.op0.set_shape(
+            [self.ip1.shape[-i] if i > self.ip0.dims else
+             (self.ip0.shape[-i] if i > self.ip1.dims else
+              max(self.ip0.shape[-i], self.ip1.shape[-i])) \
+             for i in range(1, dims+1)][::-1])
+```
 #### Pooling
-#### FeatureMax
+This class covers operators which pool over the spatial dimension. Currently this include AveragePool and MaxPool.
 #### Dimension Pooling
+This class covers operators which pool over one entire dimension. Currently this includes Min, Max, Mean, and Sum
 #### Reductions
+Reductions are similar to dimension pooling. The reductions include L1, L2, LogSum, Max, Mean, Min, Prod, and Sum.
 #### Reshaping
-### Schedule Generation
+Reshapings are an oddity in ONNX. Currently the "shape" input to a Reshape is a Tensor, instead of a statically known value. This is troublesome, since we want all shapes to be inferrable at code generation time. We get around this by allowing reshapes only when the input shape Tensor has an initializer.
 
-## To-do
+## Future work
 ### Dynamic shapes
+
 ### Schedule generation
+Current the scheduling is naive, `compute_root` every output. 
 ### Halide integration
+The current implementation recreates much of the Halide IR in order to serialize it as a human-readable pipeline.
+Serializing Halide in this way is useful since it provides an escape hatch to allow further modification of the pipeline for various uses, such as autoscheduling or hardware synthesis. However, I would prefer to not recreate the Halide IR within Python, and I would prefer to generate Halide code from within Halide. If serialization of Halide pipelines was added, I would reimplement this system more closely tied to Halide.
