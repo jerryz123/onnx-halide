@@ -191,7 +191,7 @@ Reshapings are an oddity in ONNX. Currently the "shape" input to a Reshape is a 
 ONNX allows for tensors with dynamic shapes in the model graph, although this seems to be an unused feature for neural networks. Currently many operators with dynamic shaping, like Tile, are unimplemented
 ### Schedule generation
 Currently the scheduling is naive, `compute_root` every output for every operator. The performance is not great, but is within one order of magnitude of state-of-the-art. Maybe more intelligent scheduling will be implemented in the future.
-~[perf](img/perf.png)
+![perf](img/perf.png)
 ### Compilation time
 While the generator source code is emitted and compiled instantaneously, running the generator can take upwards of 30 minutes when `no-asserts` is not specified. This is due to an unresolved issue in Halide. In any case, the generated asserts are redundant with asserts built into the Python interface.
 ### Halide integration
