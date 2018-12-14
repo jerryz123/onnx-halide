@@ -163,7 +163,7 @@ RDom r(0, 10);
 C(d1, d0) = sum(A(r[0], d0) * B(d1, r[0]));
 ```
 ### Operator Categories
-Some of the ONNX operators fall into categories. These categories roughly correspond to the `NodeGenerator` class hierarchy.
+Some of the ONNX operators fall into categories. These categories roughly correspond to the `NodeGenerator` class hierarchy. For example, all binary operators inherit the shape inference and expression formation from the `BinaryGenerator` class.
 #### Unary Operators
 Unary operators are very simple, with only one input Tensor, and trivial shape inference. These cover the class of activation functions
 #### Binary Operators
@@ -178,7 +178,7 @@ Binary operators represent operators between two Tensors that support broadcasti
              for i in range(1, dims+1)][::-1])
 ```
 #### Pooling
-This class covers operators which pool over the spatial dimension. Currently this include AveragePool and MaxPool.
+This class covers operators which pool over the spatial dimensions. Currently this include AveragePool and MaxPool.
 #### Dimension Pooling
 This class covers operators which pool over one entire dimension. Currently this includes Min, Max, Mean, and Sum
 #### Reductions
@@ -186,11 +186,14 @@ Reductions are similar to dimension pooling. The reductions include L1, L2, LogS
 #### Reshaping
 Reshapings are an oddity in ONNX. Currently the "shape" input to a Reshape is a Tensor, instead of a statically known value. This is troublesome, since we want all shapes to be inferrable at code generation time. We get around this by allowing reshapes only when the input shape Tensor has an initializer.
 
-## Future work
+## Future work/Notes
 ### Dynamic shapes
-
+ONNX allows for tensors with dynamic shapes in the model graph, although this seems to be an unused feature for neural networks. Currently many operators with dynamic shaping, like Tile, are unimplemented
 ### Schedule generation
-Current the scheduling is naive, `compute_root` every output. 
+Currently the scheduling is naive, `compute_root` every output for every operator. The performance is not great, but is within one order of magnitude of state-of-the-art. Maybe more intelligent scheduling will be implemented in the future.
+~[perf](img/perf.png)
+### Compilation time
+While the generator source code is emitted and compiled instantaneously, running the generator can take upwards of 30 minutes when `no-asserts` is not specified. This is due to an unresolved issue in Halide. In any case, the generated asserts are redundant with asserts built into the Python interface.
 ### Halide integration
 The current implementation recreates much of the Halide IR in order to serialize it as a human-readable pipeline.
-Serializing Halide in this way is useful since it provides an escape hatch to allow further modification of the pipeline for various uses, such as autoscheduling or hardware synthesis. However, I would prefer to not recreate the Halide IR within Python, and I would prefer to generate Halide code from within Halide. If serialization of Halide pipelines was added, I would reimplement this system more closely tied to Halide.
+Serializing Halide in this way is useful since it provides an escape hatch to allow further modification of the pipeline for various uses, such as autoscheduling or hardware synthesis. However, I would prefer to not recreate the Halide IR within Python, and instead generate Halide code from within Halide. If serialization of pipelines was added Halide, I would reimplement this system more closely tied to Halide.
