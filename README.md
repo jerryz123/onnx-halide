@@ -168,10 +168,23 @@ C(d1, d0) = sum(A(r[0], d0) * B(d1, r[0]));
 ### Operator Categories
 Some of the ONNX operators fall into categories. These categories roughly correspond to the `NodeGenerator` class hierarchy. For example, all binary operators inherit the shape inference and expression formation from the `BinaryGenerator` class.
 #### Unary Operators
-Unary operators are very simple, with only one input Tensor, and trivial shape inference. These cover the class of activation functions
-#### Binary Operators
-Binary operators represent operators between two Tensors that support broadcasting. The shape inference for broadcasting follows numpy-style rules. Similar logic is performed in `BinaryGenerator.generate_alg` to determine the correct index variables for each input.
+Unary operators are very simple, with only one input Tensor, and trivial shape inference. These cover the class of activation functions. As seen below, inheritors of this class just need to override a format string.
 ```
+class UnaryGenerator(NodeGenerator):
+    def generate_alg(self, dim_vars):
+        ip0_expr  = self.generate_funcref(self.ip0,
+                                          dim_vars)
+        unop_expr = self.expr.format(ip0_expr)
+        self.generate_asn(self.op0, dim_vars, unop_expr)
+class AbsGenerator(UnaryGenerator):
+    op_type = "Abs"
+    expr    = "abs({})"
+```
+
+#### Binary Operators
+Binary operators represent operators between two Tensors that support broadcasting. The shape inference for broadcasting follows numpy-style rules. Similar logic is performed in `BinaryGenerator.generate_alg` to determine the correct index variables for each input. In the example below, see how inheritors only need to provide an `op_type` and an `expr` format string.
+```
+class BinaryGenerator(NodeGenerator):
     def infer_shapes(self):
         dims = max(self.ip0.dims, self.ip1.dims)
         self.op0.set_shape(
@@ -179,11 +192,23 @@ Binary operators represent operators between two Tensors that support broadcasti
              (self.ip0.shape[-i] if i > self.ip1.dims else
               max(self.ip0.shape[-i], self.ip1.shape[-i])) \
              for i in range(1, dims+1)][::-1])
+    def generate_alg(self, dim_vars):
+        ip0_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
+                        zip(self.ip0.shape, dim_vars[-len(self.ip0.shape):])]
+        ip0_expr     = self.generate_funcref(self.ip0, ip0_dim_vars)
+        ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
+                        zip(self.ip1.shape, dim_vars[-len(self.ip1.shape):])]
+        ip1_expr     = self.generate_funcref(self.ip1, ip1_dim_vars)
+        expr         = self.expr.format(ip0_expr, ip1_expr)
+        self.generate_asn(self.op0, dim_vars, expr)
+class AddGenerator(BinaryGenerator):
+    op_type = "Add"
+    expr    = "{}+{}"
 ```
 #### Pooling
-This class covers operators which pool over regions of the spatial dimensions. Currently this include AveragePool and MaxPool.
+This class covers operators which pool over regions of the spatial dimensions. Currently this include AveragePool and MaxPool. The `PoolGenerator` class calculates generic indices for the input tensor. Inheritors of the `PoolGenerator` clsas only need to override the `generate_rhs` method and apply these indices in some expression.
 #### Dimension Pooling
-This class covers operators which pool over one entire dimension. Currently this includes Min, Max, Mean, and Sum
+This class covers operators which pool over one entire dimension. Currently this includes Min, Max, Mean, and Sum.
 #### Reductions
 Reductions are similar to dimension pooling, except ONNX treats their attributes differently. The reductions include L1, L2, LogSum, Max, Mean, Min, Prod, and Sum.
 #### Reshaping
