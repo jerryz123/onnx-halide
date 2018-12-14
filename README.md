@@ -2,31 +2,34 @@
 This tool converts ONNX neural networks to Halide generators. 
 
 ## Installation
-This tool has three dependencies.
+This tool has three dependencies, `numpy`, `onnx`, and Halide.
+
 `numpy` and `onnx` can be fetched from PyPI.
+The following commands will install the module.
 ``` 
 pip3 install numpy onnx
 git clone https://github.com/jerryz123/onnx-halide.git
 cd onnx-halide
 pip3 install -e .
 ```
-Halide can be build from source, or fetched from a nightly build. 
+
+Halide can be built from source, or fetched from a nightly build. 
 Either way, `HALIDE_ROOT_DIR` should point to the install directory for Halide.
 
 ### Installing Halide from source
 Follow instructions at [https://github.com/halide/Halide](https://github.com/halide/Halide)
 
 ### Installing Halide from nightly
-Fetch and extract correct version from [https://buildbot.halide-lang.org/](https://buildbot.halide-lang.org/)
+Fetch and extract correct version from [https://buildbot.halide-lang.org/](https://buildbot.halide-lang.org/). Check your `gcc` version matches.
 
-Set `HALIDE_ROOT_DIR` to destination directory.
+Set `HALIDE_ROOT_DIR` to installation directory.
 
 ### Installing Caffe2
-To run comparisons against a reference Caffe2 backend, [install PyTorch+Caffe2](https://caffe2.ai/docs/getting-started.html?platform=ubuntu&configuration=prebuilt)
+To run comparisons against a reference Caffe2 backend, [install PyTorch+Caffe2](https://caffe2.ai/docs/getting-started.html?platform=ubuntu&configuration=prebuilt). This is only required for running `scripts/test_model.py`.
 
 ## Testing
 This tool can be verified using the ONNX backend regression suite.
-Most operators, and all full-model tests pass.
+Most operators, and all full-model tests pass. 
 
 `python3 scripts/test_onnx_backend.py`
 
@@ -117,7 +120,7 @@ Type inference is the same as the base class, but shape inference is different, 
 ### Type and Shape Inference
 The type of the output tensor is almost always the type of the input tensor, except for very specific operators, like Cast, ArgMax/Min, Shape, and BinOps.
 
-Shape inference is typically tricker, due to the availability of multi-dimensional broadcasting for certain classes of operators. For instance, a tensor of shape [1, 3, 5] can be added to a tensor of shape [2, 3, 1] to output a tensor of shape [2, 3, 5]. The output shape must for these operators be carefully determined from the input shapes.
+Shape inference is typically trickier, due to the availability of multi-dimensional broadcasting for certain classes of operators. For instance, a tensor of shape [1, 3, 5] can be added to a tensor of shape [2, 3, 1] to output a tensor of shape [2, 3, 5]. The output shape must for these operators be carefully determined from the input shapes.
 
 In any case, the output shape and type are set in `HalideObj.set_shape(shape)` and `HalideObj.set_type(type)`. For both methods, two guarantees are provided.
  - A `HalideObj` can only have its type and shape set once during code generation.
@@ -178,19 +181,23 @@ Binary operators represent operators between two Tensors that support broadcasti
              for i in range(1, dims+1)][::-1])
 ```
 #### Pooling
-This class covers operators which pool over the spatial dimensions. Currently this include AveragePool and MaxPool.
+This class covers operators which pool over regions of the spatial dimensions. Currently this include AveragePool and MaxPool.
 #### Dimension Pooling
 This class covers operators which pool over one entire dimension. Currently this includes Min, Max, Mean, and Sum
 #### Reductions
-Reductions are similar to dimension pooling. The reductions include L1, L2, LogSum, Max, Mean, Min, Prod, and Sum.
+Reductions are similar to dimension pooling, except ONNX treats their attributes differently. The reductions include L1, L2, LogSum, Max, Mean, Min, Prod, and Sum.
 #### Reshaping
 Reshapings are an oddity in ONNX. Currently the "shape" input to a Reshape is a Tensor, instead of a statically known value. This is troublesome, since we want all shapes to be inferrable at code generation time. We get around this by allowing reshapes only when the input shape Tensor has an initializer.
 
 ## Future work/Notes
+### Other devices
+Due to time and resource constraints this system was only tested on CPU. However, the pipelines should trivially be compilable for all valid Halide targets.
+### Recurrent networks
+Ideally, recurrent networks would contain sub-pipelines that are generated separately and called. The current ONNX specification doesn't do a very good job at demarcating subgraphs, so implementing these would be challenging. 
 ### Dynamic shapes
-ONNX allows for tensors with dynamic shapes in the model graph, although this seems to be an unused feature for neural networks. Currently many operators with dynamic shaping, like Tile, are unimplemented
+ONNX allows for tensors with dynamic shapes in the model graph, although this seems to be an unused feature for neural networks. Currently many operators with dynamic shaping, like Tile, are unsupported. There has been some debate in the ONNX community over how dynamic shapes should represented.
 ### Schedule generation
-Currently the scheduling is naive, `compute_root` every output for every operator. The performance is not great, but is within one order of magnitude of state-of-the-art. Maybe more intelligent scheduling will be implemented in the future.
+Currently the scheduling is naive, `compute_root` every output for every operator. The performance is not great, but is within one order of magnitude of state-of-the-art. More intelligent scheduling may be implemented in the future.
 ![perf](img/perf.png)
 ### Compilation time
 While the generator source code is emitted and compiled instantaneously, running the generator can take upwards of 30 minutes when `no-asserts` is not specified. This is due to an unresolved issue in Halide. In any case, the generated asserts are redundant with asserts built into the Python interface.
