@@ -204,3 +204,5 @@ While the generator source code is emitted and compiled instantaneously, running
 ### Halide integration
 The current implementation recreates much of the Halide IR in order to serialize it as a human-readable pipeline.
 Serializing Halide in this way is useful since it provides an escape hatch to allow further modification of the pipeline for various uses, such as autoscheduling or hardware synthesis. However, I would prefer to not recreate the Halide IR within Python, and instead generate Halide code from within Halide. If serialization of pipelines was added Halide, I would reimplement this system more closely tied to Halide.
+### Travis testing
+An attempt was made to get this working with Travis. The issue seems to be incompatibilities between GCC versions shipped on the Travis machines and the Halide nightly builds. I just need to find a configuration which works.
