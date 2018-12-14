@@ -119,7 +119,7 @@ The type of the output tensor is almost always the type of the input tensor, exc
 
 Shape inference is typically tricker, due to the availability of multi-dimensional broadcasting for certain classes of operators. For instance, a tensor of shape [1, 3, 5] can be added to a tensor of shape [2, 3, 1] to output a tensor of shape [2, 3, 5]. The output shape must for these operators be carefully determined from the input shapes.
 
-In any case, the output shape and type are set in `HalideObj.set_shape(shape)` and `HalideObj.set_type(type)`. For both methods, two checks are performed.
+In any case, the output shape and type are set in `HalideObj.set_shape(shape)` and `HalideObj.set_type(type)`. For both methods, two guarantees are provided.
  - A `HalideObj` can only have its type and shape set once during code generation.
  - If a `HalideObj` is an output Func with its type and shape pre-specified, the inferred type and shape must match what was specified. This validates the type and shape inference.
 
@@ -167,7 +167,7 @@ Some of the ONNX operators fall into categories. These categories roughly corres
 #### Unary Operators
 Unary operators are very simple, with only one input Tensor, and trivial shape inference. These cover the class of activation functions
 #### Binary Operators
-Binary operators represent operators between two Tensors that support broadcasting. The shape inference for broadcasting is interesting.
+Binary operators represent operators between two Tensors that support broadcasting. The shape inference for broadcasting follows numpy-style rules. Similar logic is performed in `BinaryGenerator.generate_alg` to determine the correct index variables for each input.
 ```
     def infer_shapes(self):
         dims = max(self.ip0.dims, self.ip1.dims)
