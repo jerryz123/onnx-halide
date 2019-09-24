@@ -1,0 +1,37 @@
+import numpy as np
+from onnx import TensorProto
+
+
+class MasterType:
+    onnx_int_dict = {}
+    c_dict = {}
+    def __init__(self, onnx_str, c, numpy, min, max):
+        self.onnx_int    = {k:v for k,v in TensorProto.DataType.items()}[onnx_str]
+        self.onnx_str    = onnx_str
+        self.c_t         = c
+        self.np_t        = numpy
+        self.c_min       = min
+        self.c_max       = max
+        MasterType.onnx_int_dict[self.onnx_int] = self
+        MasterType.c_dict[self.c_t] = self
+
+    def __eq__(self, other):
+        return self.onnx_int == other.onnx_int
+
+    @classmethod
+    def from_onnx(cls, onnx_int):
+        return MasterType.onnx_int_dict[onnx_int]
+    @classmethod
+    def from_c(c):
+        return MasterType.c_dict[c]
+
+#            ONNX str |    c      |   numpy  |            min                   |              max
+TYPE_MAP = [("FLOAT16","float16_t",np.float16,"float16_t.make_infinity(0)"      ,"float16_t.make_infinity(1)"),
+            ("FLOAT"  ,"float"    ,np.float32,"cast<float  >(Expr(-FLT_MAX))"   ,"cast<float  >(Expr(FLT_MAX))"),
+            ("DOUBLE" ,"double"   ,np.float64,"cast<double >(Expr(-DBL_MAX))"   ,"cast<double >(Expr(DBL_MAX))"),
+            ("BOOL"   ,"int8_t"   ,np.bool   ,"cast<int8_t >(Expr(-CHAR_MAX))"  ,"cast<int8_t >(Expr(CHAR_MAX))"),
+            ("INT32"  ,"int32_t"  ,np.int32  ,"cast<int32_t>(Expr(-INT_MAX))"   ,"cast<int32_t>(Expr(INT_MAX))"),
+            ("INT64"  ,"int64_t"  ,np.int64  ,"cast<int64_t>(Expr(-LLONG_MAX))" ,"cast<int64_t>(Expr(LLONG_MAX))")]
+
+for ts in TYPE_MAP:
+    MasterType(*ts)
