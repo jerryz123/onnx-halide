@@ -5,12 +5,14 @@ import ctypes
 import numpy as np
 import time
 import os
+from os.path import dirname, join
 
 from .types import MasterType
-from .halide_generator import HalideGenerator
+from .halide_generator import HalideGraphVisitor
+
 
 class HalideBackendRep(BackendRep):
-    def __init__(self, model, generator=HalideGenerator("temp", "g++", os.environ['RISCV'])):
+    def __init__(self, model, visitor=HalideGraphVisitor()):
         self.name = "{}_{}_{}".format(model.graph.name,
                                       model.model_version,
                                       model.domain.replace('.', '-'))
@@ -28,9 +30,13 @@ class HalideBackendRep(BackendRep):
         value_info = {i.name: i.type for i in list(model.graph.input) +
                       list(model.graph.output) + list(model.graph.value_info)}
 
-        for nidx, node in enumerate(model.graph.node):
-            code, objects, headers = generator.generate(node, value_info)
-            print(code, objects, headers)
+        code, objects, headers = visitor.visit(model.graph, value_info)
+        print(code)
+        print(objects)
+        print(headers)
+        # for nidx, node in enumerate(model.graph.node):
+        #     code, objects, headers = generator.generate(node, value_info)
+        #     print(code, objects, headers)
             # print(code, library, header)
 
     def run(self, inputs, **kwargs):
