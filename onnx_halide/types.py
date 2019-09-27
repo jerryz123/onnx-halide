@@ -19,9 +19,6 @@ class MasterType:
         return self.onnx_int == other.onnx_int
 
     @classmethod
-    def from_onnx(cls, onnx_int):
-        return MasterType.onnx_int_dict[onnx_int]
-    @classmethod
     def from_c(c):
         return MasterType.c_dict[c]
 
@@ -35,3 +32,6 @@ TYPE_MAP = [("FLOAT16","float16_t",np.float16,"float16_t.make_infinity(0)"      
 
 for ts in TYPE_MAP:
     MasterType(*ts)
+
+def from_onnx_t(onnx_t):
+    return MasterType.onnx_int_dict[onnx_t]

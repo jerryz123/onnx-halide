@@ -1,5 +1,5 @@
 from .base_generator import BaseGraphVisitor, BaseNodeVisitor
-from .types import MasterType
+from .types import from_onnx_t
 import os
 from os.path import join, dirname
 import subprocess
@@ -17,7 +17,8 @@ class HalideNodeVisitor(BaseNodeVisitor):
     def n_dim_vars(self):
         pass
 
-    def __init__(self):
+    def __init__(self, **kwargs):
+        BaseNodeVisitor.__init__(self, **kwargs)
         halide_runtime = join(dirname(__path__[0]), "runtime/HalideRuntime.o")
         BaseGraphVisitor.register_runtime({halide_runtime}, set())
 
@@ -32,13 +33,13 @@ class HalideNodeVisitor(BaseNodeVisitor):
         gen_name = "HalideNode_{}".format(self.outputs[0])
 
         input_decls = '\n'.join(["Input<Buffer<{0}>> {1}{{\"{1}\", {2}}};".format(
-            MasterType.from_onnx(value_info[i].tensor_type.elem_type).c_t,
+            from_onnx_t(value_info[i].tensor_type.elem_type).c_t,
             i,
             len(value_info[i].tensor_type.shape.dim),
             list(value_info[i].tensor_type.shape.dim)) for i in self.inputs])
 
         output_decls = '\n'.join(["Output<Buffer<{0}>> {1}{{\"{1}\", {2}}};".format(
-            MasterType.from_onnx(value_info[i].tensor_type.elem_type).c_t,
+            from_onnx_t(value_info[i].tensor_type.elem_type).c_t,
             i,
             len(value_info[i].tensor_type.shape.dim),
             list(value_info[i].tensor_type.shape.dim)) for i in self.outputs])
@@ -94,80 +95,64 @@ HALIDE_REGISTER_GENERATOR({0}, {0})
         r = subprocess.run(cmd, check=True, shell=True)
         print(cmd)
 
-        cmd  = "./{} -g {} -o {} ".format(generator_bin, gen_name, self.temp_dir)
+        cmd  = "{} -g {} -o {} ".format(generator_bin, gen_name, self.temp_dir)
         cmd += "-e h,o "
         cmd += "target=riscv-64-noos-no_asserts-no_runtime"
 
         r = subprocess.run(cmd, check=True, shell=True)
 
-        srcc = """
-#include "{0}.h"
-#include "HalideBuffer.h"
-#include "HalideRuntime.h"
-#include <cfenv>
-using float16_t = uint16_t;
-using namespace Halide::Runtime;
-extern "C" {{
-
-int {0}_c_func({1}) {{
-
-{2}
-
-int r = {0}({3});
-
-return r;
-}};
-
-}}
-"""
-
-        
-        cargs    = []
-        buffers  = []
+        code = []
         haargs   = []
 
         for i in self.inputs + self.outputs:
             ttype = value_info[i].tensor_type
-            ctype = MasterType.from_onnx(ttype.elem_type).c_t
+            ctype = from_onnx_t(ttype.elem_type).c_t
             shape = [d.dim_value for d in ttype.shape.dim]
 
-            cargs.append("{}* {}".format(
-                ctype,
-                i))
-            buffers.append("Buffer<{0}> {1}_buf({1}, {{{2}}});".format(
+            code.append("  Halide::Runtime::Buffer<{0}> {1}_buf({1}, {{{2}}});".format(
                 ctype,
                 i,
                 JOIN_VARS([str(i) for i in shape])))
             haargs.append("{}_buf".format(i))
 
-        srcc = srcc.format(gen_name,
-                           ','.join(cargs),
-                           '\n'.join(buffers),
-                           ','.join(haargs))
+        code.append("  {}({});".format(gen_name, ','.join(haargs)))
 
-        srcc_fname = join(self.temp_dir, "{}.c".format(gen_name))
-        with open(srcc_fname, 'w') as f:
-            f.write(srcc)
+        code = ["{"] + code + ["};"]
+        objects = {join(self.temp_dir, "{}.o".format(gen_name))}
+        headers = set(["\"{}\"".format(n) for n in
+                       [join(self.temp_dir, "{}.h".format(gen_name)),
+                        join(self.install_dir, "include/HalideBuffer.h"),
+                        join(self.install_dir, "include/HalideRuntime.h")]])
+        return code, objects, headers
 
-        cmd  = "{} -std=c++11 ".format(self.rvcxx)
-        cmd += "-I {} -I {} -I {} -fno-rtti ".format(join(self.install_dir, "include"),
-                                                     join(self.install_dir, "share/halide/tools"),
-                                                     self.temp_dir)
-        cmd += "-march=rv64imafdc -mabi=lp64d "
-        cmd += "-c {} -o {} ".format(srcc_fname,
-                                     join(self.temp_dir, "{}_c.o".format(gen_name)))
+        # srcc = srcc.format(gen_name,
+        #                    ','.join(cargs),
+        #                    '\n'.join(buffers),
+        #                    ','.join(haargs))
 
-        r = subprocess.run(cmd, check=True, shell=True)
+        # srcc_fname = join(self.temp_dir, "{}.c".format(gen_name))
+        # with open(srcc_fname, 'w') as f:
+        #     f.write(srcc)
 
-        objects = {join(self.temp_dir, "{}.o".format(gen_name)),
-                   join(self.temp_dir, "{}_c.o".format(gen_name))}
+        # cmd  = "{} -std=c++11 ".format(self.rvcxx)
+        # cmd += "-I {} -I {} -I {} -fno-rtti ".format(join(self.install_dir, "include"),
+        #                                              join(self.install_dir, "share/halide/tools"),
+        #                                              self.temp_dir)
+        # cmd += "-march=rv64imafdc -mabi=lp64d "
+        # cmd += "-c {} -o {} ".format(srcc_fname,
+        #                              join(self.temp_dir, "{}_c.o".format(gen_name)))
 
-        headers = {join(self.temp_dir, "{}.h".format(gen_name))}
+        # r = subprocess.run(cmd, check=True, shell=True)
 
-        code = "{}_c_func({});".format(
-            gen_name,
-            ','.join(cargs))
-        return [code], objects, headers
+        # objects = {join(self.temp_dir, "{}.o".format(gen_name)),
+        #            join(self.temp_dir, "{}_c.o".format(gen_name))}
+
+        # headers = {join(self.temp_dir, "{}.h".format(gen_name))}
+
+        # code = "{}_c_func({});".format(
+        #     gen_name,
+        #     ','.join(cargs))
+        # return [code], objects, headers
 
 
     def generate_funcref(self, func, dim_vars):
