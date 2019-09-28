@@ -8,12 +8,12 @@ class MasterType:
     def __init__(self, onnx_str, c, numpy, min, max):
         self.onnx_int    = {k:v for k,v in TensorProto.DataType.items()}[onnx_str]
         self.onnx_str    = onnx_str
-        self.c_t         = c
-        self.np_t        = numpy
+        self.c           = c
+        self.np          = numpy
         self.c_min       = min
         self.c_max       = max
         MasterType.onnx_int_dict[self.onnx_int] = self
-        MasterType.c_dict[self.c_t] = self
+        MasterType.c_dict[self.c] = self
 
     def __eq__(self, other):
         return self.onnx_int == other.onnx_int
@@ -35,3 +35,17 @@ for ts in TYPE_MAP:
 
 def from_onnx_t(onnx_t):
     return MasterType.onnx_int_dict[onnx_t]
+
+class VI:
+    def __init__(self, value_info):
+        self.tensor_type = value_info.tensor_type
+
+    @property
+    def shape(self):
+        return [d.dim_value for d in self.tensor_type.shape.dim]
+
+    @property
+    def t(self):
+        return from_onnx_t(self.tensor_type.elem_type)
+
+    

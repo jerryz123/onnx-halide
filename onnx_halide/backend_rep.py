@@ -7,7 +7,7 @@ import time
 import os
 from os.path import dirname, join, abspath
 
-from .types import from_onnx_t
+from .types import VI, from_onnx_t
 from .halide_generator import HalideGraphVisitor
 
 
@@ -25,7 +25,7 @@ class HalideBackendRep(BackendRep):
             if init.raw_data:
                 onnx_data = np.frombuffer(init.raw_data,
                                           count=np.prod(dims),
-                                          dtype=from_onnx_t(init.data_type).np_t)
+                                          dtype=from_onnx_t(init.data_type).np)
 
 
         value_info = {i.name: i.type for i in list(model.graph.input) +
@@ -66,39 +66,37 @@ class HalideBackendRep(BackendRep):
         for i, ip in enumerate(list(self.model.graph.input)):
             name = ip.name
             array = inputs[i]
-            ttype = self.value_info[name].tensor_type
+            vi = VI(self.value_info[name])
 
             raw_file = join(self.temp_dir, "{}.raw".format(name))
             array.tofile(raw_file)
 
             code.extend([
-                "{} {}[{}];".format(from_onnx_t(ttype.elem_type).c_t,
+                "{} v_{}[{}];".format(vi.t.c,
                                     name,
-                                    '*'.join([str(d.dim_value) \
-                                              for d in self.value_info[name].tensor_type.shape.dim])),
+                                    '*'.join(map(str, vi.shape))),
                 "FILE *{}_f = fopen(\"{}\", \"rb\");".format(name, raw_file),
-                "fread(&{0}, sizeof({0}), 1, {0}_f);".format(name),
+                "fread(&v_{0}, sizeof(v_{0}), 1, {0}_f);".format(name),
                 "fclose({}_f);".format(name),
                 ""])
-            args.append(name)
+            args.append("v_" + name)
 
         for o, op in enumerate(list(self.model.graph.output)):
             name = op.name
-            ttype = self.value_info[name].tensor_type
+            vi = VI(self.value_info[name])
             code.extend([
-                "{} {}[{}];".format(from_onnx_t(ttype.elem_type).c_t,
+                "{} v_{}[{}];".format(vi.t.c,
                                     name,
-                                    '*'.join([str(d.dim_value) \
-                                              for d in ttype.shape.dim])),
+                                    '*'.join(map(str, vi.shape))),
                 ""])
-            args.append(name)
+            args.append("v_" + name)
 
         code.extend(["{}({});".format(self.model.graph.name, ','.join(args)), ""])
 
 
         for o, op in enumerate(list(self.model.graph.output)):
             name = op.name
-            ttype = self.value_info[name].tensor_type
+            vi = VI(self.value_info[name])
             raw_file = join(self.temp_dir, "{}.raw".format(name))
 
             # For some reason I can't create files from within pk
@@ -108,7 +106,7 @@ class HalideBackendRep(BackendRep):
 
             code.extend([
                 "FILE *{}_f = fopen(\"{}\", \"wb\");".format(name, raw_file),
-                "fwrite(&{0}, sizeof({0}), 1, {0}_f);".format(name),
+                "fwrite(&v_{0}, sizeof(v_{0}), 1, {0}_f);".format(name),
                 "fclose({}_f);".format(name),
                 ""])
         code.append("return 0;")
@@ -138,10 +136,8 @@ class HalideBackendRep(BackendRep):
         ret = []
         for op in list(self.model.graph.output):
             name = op.name
-            ttype = self.value_info[name].tensor_type
+            vi = VI(self.value_info[name])
             raw_file = join(self.temp_dir, "{}.raw".format(name))
-            ret.append(np.fromfile(raw_file, from_onnx_t(ttype.elem_type).np_t, -1).reshape(
-                [d.dim_value for d in ttype.shape.dim]))
-        print(ret)
+            ret.append(np.fromfile(raw_file, vi.t.np, -1).reshape(vi.shape))
+
         return ret
-        exit(1)

@@ -1,4 +1,4 @@
-from .types import from_onnx_t
+from .types import VI
 import os
 from os.path import join, abspath
 import subprocess
@@ -54,21 +54,19 @@ class BaseGraphVisitor(BaseVisitor):
 
             for op in list(node.output):
                 if op not in outputs:
-                    code.append("  {} {}[{}];".format(
-                        from_onnx_t(value_info[op].tensor_type.elem_type).c_t,
+                    code.append("  {} v_{}[{}];".format(
+                        VI(value_info[op]).t.c,
                         op,
-                        "*".join([str(d.dim_value) for d in value_info[op].tensor_type.shape.dim])))
+                        "*".join(VI(value_info[op]).shape)))
 
             for c in node_code:
                 code.append("  " + c)
 
         cargs = []
         for vi in list(graph.input) + list(graph.output):
-            ttype = vi.type.tensor_type
-            ctype = from_onnx_t(ttype.elem_type).c_t
-            shape = [d.dim_value for d in ttype.shape.dim]
-
-            cargs.append("{}* {}".format(ctype, vi.name))
+            name = vi.name
+            vi   = VI(vi.type)
+            cargs.append("{}* v_{}".format(vi.t.c, name))
 
         code = ["void {}({}) {{".format(graph.name, ','.join(cargs))] + \
                code + \
@@ -76,6 +74,7 @@ class BaseGraphVisitor(BaseVisitor):
 
         api_header = '\n'.join(["#ifndef {}_H".format(graph.name),
                                 "#define {}_H".format(graph.name),
+                                "#include <stdint.h>".format(graph.name),
                                 "void {}({});".format(graph.name, ','.join(cargs)),
                                 "#endif"])
         api_header_fname = join(self.temp_dir, "{}.h".format(graph.name))
@@ -96,4 +95,5 @@ class BaseNodeVisitor(BaseVisitor):
 
         self.inputs  = list(node.input)
         self.outputs = list(node.output)
+
         pass
