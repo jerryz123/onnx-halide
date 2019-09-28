@@ -8,6 +8,8 @@ class BaseVisitor:
     cxx = "g++"
     def __init__(self, temp_dir="temp"):
         self.temp_dir = abspath(temp_dir)
+        if not os.path.exists(self.temp_dir):
+            os.makedirs(self.temp_dir)
 
     # Returns c call, object files, headers
     def visit(self, graph_or_node, value_info):
