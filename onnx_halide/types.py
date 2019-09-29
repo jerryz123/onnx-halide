@@ -2,10 +2,12 @@ import numpy as np
 from onnx import TensorProto
 
 
+from onnx.onnx_ml_pb2 import TypeProto
+from typing import Any, List
 class MasterType:
     onnx_int_dict = {}
     c_dict = {}
-    def __init__(self, onnx_str, c, numpy, min, max):
+    def __init__(self, onnx_str: str, c: str, numpy: Any, min: str, max: str) -> None:
         self.onnx_int    = {k:v for k,v in TensorProto.DataType.items()}[onnx_str]
         self.onnx_str    = onnx_str
         self.c           = c
@@ -33,19 +35,19 @@ TYPE_MAP = [("FLOAT16","float16_t",np.float16,"float16_t.make_infinity(0)"      
 for ts in TYPE_MAP:
     MasterType(*ts)
 
-def from_onnx_t(onnx_t):
+def from_onnx_t(onnx_t: int) -> MasterType:
     return MasterType.onnx_int_dict[onnx_t]
 
 class VI:
-    def __init__(self, value_info):
+    def __init__(self, value_info: TypeProto) -> None:
         self.tensor_type = value_info.tensor_type
 
     @property
-    def shape(self):
+    def shape(self) -> List[int]:
         return [d.dim_value for d in self.tensor_type.shape.dim]
 
     @property
-    def t(self):
+    def t(self) -> MasterType:
         return from_onnx_t(self.tensor_type.elem_type)
 
     

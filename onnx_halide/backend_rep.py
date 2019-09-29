@@ -11,8 +11,12 @@ from .types import VI, from_onnx_t
 from .halide_generator import HalideGraphVisitor
 
 
+from numpy import ndarray
+from onnx.onnx_ml_pb2 import ModelProto
+from onnx_halide.halide_generator import HalideGraphVisitor
+from typing import List, Type
 class HalideBackendRep(BackendRep):
-    def __init__(self, model, temp_dir="build", visitor=HalideGraphVisitor):
+    def __init__(self, model: ModelProto, temp_dir: str = "build", visitor: Type[HalideGraphVisitor] = HalideGraphVisitor) -> None:
         temp_dir = abspath(temp_dir)
         self.name = "{}_{}_{}".format(model.graph.name,
                                       model.model_version,
@@ -60,7 +64,7 @@ class HalideBackendRep(BackendRep):
         self.headers    = headers
         self.library    = src_aname
 
-    def run(self, inputs, **kwargs):
+    def run(self, inputs: List[ndarray], **kwargs) -> List[ndarray]:
         code = []
         args = []
         for i, ip in enumerate(list(self.model.graph.input)):

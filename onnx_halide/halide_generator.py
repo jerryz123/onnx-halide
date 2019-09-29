@@ -7,20 +7,22 @@ import subprocess
 from . import __path__
 from math import floor, ceil
 
+from onnx.onnx_ml_pb2 import NodeProto, TypeProto
+from typing import Dict, List, Set, Tuple, Union
 class HalideGraphVisitor(BaseGraphVisitor):
     pass
 
-def JOIN_VARS(strs):
+def JOIN_VARS(strs: List[str]) -> str:
     return ','.join(strs[::-1])
 
 
 class HalideNodeVisitor(BaseNodeVisitor):
     attr_fields = {}
     @property
-    def n_dim_vars(self):
+    def n_dim_vars(self) -> int:
         return len(VI(self.value_info[self.outputs[0]]).shape)
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         BaseNodeVisitor.__init__(self, **kwargs)
         halide_runtime = join(dirname(__path__[0]), "runtime/HalideRuntime.o")
         BaseGraphVisitor.register_runtime({halide_runtime}, set())
@@ -29,7 +31,7 @@ class HalideNodeVisitor(BaseNodeVisitor):
     def generate_alg(self, dim_vars):
         pass
 
-    def visit(self, node, value_info):
+    def visit(self, node: NodeProto, value_info: Dict[str, TypeProto]) -> Tuple[List[str], Set[str], Set[str]]:
         print(node)
         BaseNodeVisitor.visit(self, node, value_info)
 
@@ -148,27 +150,27 @@ HALIDE_REGISTER_GENERATOR({0}, {0})
 
 
 
-    def generate_funcref(self, func, dim_vars):
+    def generate_funcref(self, func: str, dim_vars: List[str]) -> str:
         return "{}({})".format(func, JOIN_VARS(dim_vars))
 
-    def generate_assign(self, lhs, rhs):
+    def generate_assign(self, lhs: str, rhs: str) -> str:
         return "{} = {};".format(lhs, rhs)
 
-    def generate_rdom(self, name, ranges):
+    def generate_rdom(self, name: str, ranges: List[Tuple[int, int]]) -> Tuple[str, List[str]]:
         rdom_name = "{}_{}".format(self.outputs[0], name)
         code = "RDom {}({});".format(rdom_name,
                                       ','.join(["{},{}".format(a,b) \
                                                 for a, b in ranges]))
         return code, ["{}[{}]".format(rdom_name, i) for i in range(len(ranges))]
 
-    def generate_cast(self, type_, expr):
+    def generate_cast(self, type_: str, expr: float) -> str:
         return "cast<{}>(Expr({}))".format(type_, expr)
 
-    def generate_funcdecl(self, name):
+    def generate_funcdecl(self, name: str) -> Tuple[str, str]:
         name = "{}_{}".format(self.outputs[0], name)
         return "Func {};".format(name), name
 
-    def generate_padded(self, name, ip, pad_const, pad_doms):
+    def generate_padded(self, name: str, ip: str, pad_const: int, pad_doms: List[Union[Tuple[str, str], Tuple[int, int]]]) -> Tuple[str, str]:
         name = "{}_{}".format(self.outputs[0], name)
         return "Func {} = {};".format(
             name,
@@ -418,7 +420,7 @@ class HalideConvVisitor(HalideNodeVisitor):
                    "dilations"   : ("dilations"   , "ints", None),
                    "group"       : ("group"       , "i"   , 1)}
 
-    def generate_alg(self, dim_vars):
+    def generate_alg(self, dim_vars: List[str]) -> List[str]:
         w = VI(self.value_info[self.inputs[1]])
         ip0 = VI(self.value_info[self.inputs[0]])
         op0 = VI(self.value_info[self.outputs[0]])
@@ -481,7 +483,7 @@ class HalideBatchNormVisitor(HalideNodeVisitor):
     attr_fields = {"eps"   : ("epsilon", "f"   , 1e-5),
                    "eps_t" : ("epsilon", "type", None)}
 
-    def generate_alg(self, dim_vars):
+    def generate_alg(self, dim_vars: List[str]) -> List[str]:
         x    = self.inputs[0]
         s    = self.inputs[1]
         bias = self.inputs[2]
