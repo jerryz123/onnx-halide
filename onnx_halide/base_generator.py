@@ -3,10 +3,12 @@ import os
 from os.path import join, abspath
 import subprocess
 
+from onnx.onnx_ml_pb2 import GraphProto, NodeProto, TypeProto
+from typing import Any, Dict, List, Set, Tuple
 class BaseVisitor:
     install_dir = os.environ['RISCV']
     cxx = "g++"
-    def __init__(self, temp_dir="temp"):
+    def __init__(self, temp_dir: str = "temp") -> None:
         self.temp_dir = abspath(temp_dir)
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir)
@@ -25,21 +27,21 @@ class BaseGraphVisitor(BaseVisitor):
     runtime_objects = set()
     runtime_headers = set()
 
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         BaseVisitor.__init__(self, **kwargs)
         self.objects = set()
         self.headers = set()
 
     @classmethod
-    def register(cls, node_class):
+    def register(cls, node_class: Any) -> None:
         cls.node_lookup[node_class.op_type] = node_class
 
     @classmethod
-    def register_runtime(cls, objects, headers):
+    def register_runtime(cls, objects: Set[str], headers: Set[Any]) -> None:
         cls.runtime_objects |= objects
         cls.runtime_headers |= headers
 
-    def visit(self, graph, value_info):
+    def visit(self, graph: GraphProto, value_info: Dict[str, TypeProto]) -> Tuple[List[str], List[str], Set[str]]:
         inputs = [i.name for i in list(graph.input)]
         outputs = [i.name for i in list(graph.output)]
 
@@ -90,7 +92,7 @@ class BaseGraphVisitor(BaseVisitor):
 
 class BaseNodeVisitor(BaseVisitor):
     op_type = ""
-    def visit(self, node, value_info):
+    def visit(self, node: NodeProto, value_info: Dict[str, TypeProto]) -> None:
         assert(node.op_type == self.op_type)
         self.node = node
         self.value_info = value_info

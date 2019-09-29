@@ -7,6 +7,8 @@ from onnx import helper, TensorProto, shape_inference
 import subprocess
 from .backend_rep import HalideBackendRep
 
+from onnx.onnx_ml_pb2 import ModelProto
+from onnx_halide.backend_rep import HalideBackendRep
 class HalideBackend(Backend):
 
     # @classmethod
@@ -33,11 +35,11 @@ class HalideBackend(Backend):
         return rep.run(input)
 
     @classmethod
-    def prepare(cls, model, device='CPU', **kwargs):
+    def prepare(cls, model: ModelProto, device: str = 'CPU', **kwargs) -> HalideBackendRep:
         return HalideBackendRep(onnx.utils.polish_model(model))
 
     @classmethod
-    def supports_device(cls, device='CPU'):
+    def supports_device(cls, device: str = 'CPU') -> bool:
         return device in ['CPU']
 
 
