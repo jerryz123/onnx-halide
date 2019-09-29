@@ -3,9 +3,9 @@ from .types import VI
 import numpy as np
 import os
 from os.path import join, dirname
-import subprocess
 from . import __path__
 from math import floor, ceil
+from .environment_link import Environment
 
 from onnx.onnx_ml_pb2 import NodeProto, TypeProto
 from typing import Dict, List, Set, Tuple, Union
@@ -100,29 +100,7 @@ HALIDE_REGISTER_GENERATOR({0}, {0})
         src = src.format(gen_name, input_decls, output_decls, dim_var_decls,
                          '\n'.join(alg))
 
-        src_fname = join(self.temp_dir, "{}.cpp".format(gen_name))
-        generator_bin = join(self.temp_dir, "{}.bin".format(gen_name))
-        with open(src_fname, 'w') as f:
-            f.write(src)
-
-
-        cmd  = "{} -std=c++11 ".format(self.cxx)
-        cmd += "-I {} -I {} ".format(join(self.install_dir, "include"),
-                                     join(self.install_dir, "share/halide/tools"))
-        cmd += "-fno-rtti "
-        cmd += "{} {} {} ".format(src_fname,
-                                  join(self.install_dir, "lib/libHalide.so"),
-                                  join(self.install_dir, "share/halide/tools/GenGen.cpp"))
-        cmd += "-o {} -ldl -lpthread -lz ".format(generator_bin)
-        cmd += "-lrt -ldl -ltinfo -lm"
-
-        r = subprocess.run(cmd, check=True, shell=True)
-
-        cmd  = "{} -g {} -o {} ".format(generator_bin, gen_name, self.temp_dir)
-        cmd += "-e h,o "
-        cmd += "target=riscv-64-linux-no_asserts-no_runtime-no_bounds_query"
-
-        r = subprocess.run(cmd, check=True, shell=True)
+        Environment.compile_kernel(src, gen_name, self.temp_dir)
 
         code = []
         haargs   = []

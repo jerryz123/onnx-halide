@@ -9,12 +9,12 @@ from os.path import dirname, join, abspath
 
 from .types import VI, from_onnx_t
 from .halide_generator import HalideGraphVisitor
-
+from .environment_link import Environment
 
 from numpy import ndarray
 from onnx.onnx_ml_pb2 import ModelProto
-from onnx_halide.halide_generator import HalideGraphVisitor
 from typing import List, Type
+
 class HalideBackendRep(BackendRep):
     def __init__(self, model: ModelProto, temp_dir: str = "build", visitor: Type[HalideGraphVisitor] = HalideGraphVisitor) -> None:
         temp_dir = abspath(temp_dir)
@@ -40,29 +40,12 @@ class HalideBackendRep(BackendRep):
         code = ["#include {}".format(h) for h in headers] + code
 
         src = '\n'.join(code)
-        src_cname = join(temp_dir, "generated.c")
-        src_oname = join(temp_dir, "generated.o")
-        src_aname = join(temp_dir, "generated.a")
-        with open(src_cname, 'w') as f:
-            f.write(src)
-
-        cmd  = "riscv64-unknown-elf-g++ -std=c++11 "
-        cmd += "-I./ -fno-rtti "
-        cmd += "-march=rv64imafdc -mabi=lp64 "
-        cmd += "-c {} -o {} ".format(src_cname, src_oname)
-
-        r = subprocess.run(cmd, check=True, shell=True)
-
-        cmd  = "riscv64-unknown-elf-ar rcs {} {}".format(
-            src_aname,
-            ' '.join([src_oname] + list(objects)))
-        r = subprocess.run(cmd, check=True, shell=True)
 
         self.model      = model
         self.value_info = value_info
         self.temp_dir   = temp_dir
         self.headers    = headers
-        self.library    = src_aname
+        self.library    = Environment.compile_library(src, objects, self.temp_dir)
 
     def run(self, inputs: List[ndarray], **kwargs) -> List[ndarray]:
         code = []
@@ -122,21 +105,8 @@ class HalideBackendRep(BackendRep):
                ["};"]
 
         src = '\n'.join(code)
-        src_fname = join(self.temp_dir, "main.c")
-        src_bname = join(self.temp_dir, "main.riscv")
-        with open(src_fname, 'w') as f:
-            f.write(src)
-
-        cmd  = "riscv64-unknown-elf-g++ -std=c++11 "
-        cmd += "-fno-rtti "
-        cmd += "-march=rv64imafdc -mabi=lp64 "
-        cmd += "{} {} -o {} ".format(src_fname, self.library, src_bname)
-
-        r = subprocess.run(cmd, check=True, shell=True)
-
-        cmd  = "spike pk {}".format(src_bname)
-        r = subprocess.run(cmd, check=True, shell=True)
-
+        Environment.run_model(src, self.library, self.temp_dir)
+        
         ret = []
         for op in list(self.model.graph.output):
             name = op.name
