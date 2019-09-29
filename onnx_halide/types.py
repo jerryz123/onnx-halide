@@ -24,13 +24,28 @@ class MasterType:
     def from_c(c):
         return MasterType.c_dict[c]
 
+# TODO: are the min/max entries correct
 #            ONNX str |    c      |   numpy  |            min                   |              max
-TYPE_MAP = [("FLOAT16","float16_t",np.float16,"float16_t.make_infinity(0)"      ,"float16_t.make_infinity(1)"),
-            ("FLOAT"  ,"float"    ,np.float32,"cast<float  >(Expr(-FLT_MAX))"   ,"cast<float  >(Expr(FLT_MAX))"),
-            ("DOUBLE" ,"double"   ,np.float64,"cast<double >(Expr(-DBL_MAX))"   ,"cast<double >(Expr(DBL_MAX))"),
-            ("BOOL"   ,"int8_t"   ,np.bool   ,"cast<int8_t >(Expr(-CHAR_MAX))"  ,"cast<int8_t >(Expr(CHAR_MAX))"),
-            ("INT32"  ,"int32_t"  ,np.int32  ,"cast<int32_t>(Expr(-INT_MAX))"   ,"cast<int32_t>(Expr(INT_MAX))"),
-            ("INT64"  ,"int64_t"  ,np.int64  ,"cast<int64_t>(Expr(-LLONG_MAX))" ,"cast<int64_t>(Expr(LLONG_MAX))")]
+TYPE_MAP = [("FLOAT16","float16_t",np.float16,""                                ,""),
+            ("FLOAT"  ,"float"    ,np.float32,""                                ,""),
+            ("DOUBLE" ,"double"   ,np.float64,""                                ,""),
+            ("BOOL"   ,"int8_t"   ,np.bool   ,""                                ,""),
+            ("UINT8"  ,"uint8_t"  ,np.uint8  ,""                                ,""),
+            ("INT8"   ,"int8_t"   ,np.int8   ,""                                ,""),
+            ("UINT16" ,"uint16_t" ,np.uint16 ,""                                ,""),
+            ("INT16"  ,"int16_t"  ,np.int16  ,""                                ,""),
+            ("UINT32" ,"uint32_t" ,np.uint32 ,""                                ,""),
+            ("INT32"  ,"int32_t"  ,np.int32  ,""                                ,""),
+            ("UINT64" ,"uint64_t" ,np.uint64 ,""                                ,""),
+            ("INT64"  ,"int64_t"  ,np.int64  ,""                                ,"")]
+
+# TYPE_MAP = [("FLOAT16","float16_t",np.float16,"float16_t.make_infinity(0)"      ,"float16_t.make_infinity(1)"),
+#             ("FLOAT"  ,"float"    ,np.float32,"cast<float  >(Expr(-FLT_MAX))"   ,"cast<float  >(Expr(FLT_MAX))"),
+#             ("DOUBLE" ,"double"   ,np.float64,"cast<double >(Expr(-DBL_MAX))"   ,"cast<double >(Expr(DBL_MAX))"),
+#             ("BOOL"   ,"int8_t"   ,np.bool   ,"cast<int8_t >(Expr(-CHAR_MAX))"  ,"cast<int8_t >(Expr(CHAR_MAX))"),
+#             ("INT32"  ,"int32_t"  ,np.int32  ,"cast<int32_t>(Expr(-INT_MAX))"   ,"cast<int32_t>(Expr(INT_MAX))"),
+#             ("INT64"  ,"int64_t"  ,np.int64  ,"cast<int64_t>(Expr(-LLONG_MAX))" ,"cast<int64_t>(Expr(LLONG_MAX))")]
+
 
 for ts in TYPE_MAP:
     MasterType(*ts)
