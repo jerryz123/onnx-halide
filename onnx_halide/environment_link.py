@@ -9,7 +9,7 @@ class Environment:
     on failure.
     '''
     cxx = "g++"
-    target_cxx = "riscv64-unknown-elf-g++"
+    target_cxx = "riscv64-unknown-linux-gnu-g++"
     target_arch_triple = "-march=rv64imafdc -mabi=lp64 "
     install_dir = os.environ['RISCV']
 
@@ -38,7 +38,7 @@ class Environment:
 
         r = Environment.run_cmd(cmd)
 
-        cmd  = "riscv64-unknown-elf-ar rcs {} {}".format(
+        cmd  = "riscv64-unknown-linux-gnu-ar rcs {} {}".format(
             src_aname,
             ' '.join([src_oname] + list(objects)))
         r = Environment.run_cmd(cmd)
@@ -78,9 +78,9 @@ class Environment:
             f.write(src)
 
         cmd  = "{} -std=c++11 ".format(cls.target_cxx)
-        cmd += "-fno-rtti "
+        cmd += "-fno-rtti -static "
         cmd += cls.target_arch_triple
-        cmd += "{} {} -o {} ".format(src_fname, library_name, src_bname)
+        cmd += "{} {} -latomic -lpthread -ldl -o {} ".format(src_fname, library_name, src_bname)
         r = Environment.run_cmd(cmd)
 
         cmd  = "spike pk {}".format(src_bname)
