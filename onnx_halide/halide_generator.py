@@ -235,6 +235,16 @@ class HalideAndVisitor(HalideBinaryVisitor):
     expr    = "{}&{}"
 HalideGraphVisitor.register(HalideAndVisitor)
 
+class HalideBitShiftVisitor(HalideBinaryVisitor):
+    attr_fields = {"direction":("direction", "s", "")}
+
+    op_type = "BitShift"
+
+    @property
+    def expr(self):
+        return "{}<<{}" if self.direction_ == "LEFT" else "{}>>{}"
+HalideGraphVisitor.register(HalideBitShiftVisitor)
+
 class HalideArgMVisitor(HalideNodeVisitor):
     attr_fields = {"keepdims":("keepdims", "i", 1),
                    "axis"    :("axis"    , "i", 0)}
