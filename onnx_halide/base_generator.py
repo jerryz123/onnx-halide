@@ -29,7 +29,7 @@ class BaseVisitor:
 class BaseGraphVisitor(BaseVisitor):
     node_lookup = {}
     runtime_objects = set()
-    runtime_headers = set()
+    runtime_headers = set(["<stdlib.h>", "<stdio.h>"])
 
     def __init__(self, **kwargs) -> None:
         BaseVisitor.__init__(self, **kwargs)
@@ -138,30 +138,41 @@ class ConstantVisitor(BaseNodeVisitor):
         else:
             data = np.array(list(self.tensor_.float_data)) \
                      .astype(op.t.np)
-            print(type(data.tobytes()))
 
 
         gen_name = "constant_{}".format(self.outputs[0])
-        raw_file = join(self.temp_dir, "{}.raw".format(gen_name))
-        data.tofile(raw_file)
-        obj_file = Environment.compile_raw_to_object(raw_file, gen_name, self.temp_dir)
-
-        header = ["#ifndef {}_CONSTANT_H".format(self.outputs[0]),
-                  "#define {}_CONSTANT_H".format(self.outputs[0]),
-                  "#include <stdint.h>",
-                  "#define float16_t uint16_t",
-                  "extern const char {}_start;".format(gen_name),
-                  "#endif"]
-        header = '\n'.join(header)
-
+        rfile = join(self.temp_dir, "{}.raw".format(gen_name))
+        cfile = join(self.temp_dir, "{}.c".format(gen_name))
         hfile = join(self.temp_dir, "{}.h".format(gen_name))
+
+        data.tofile(rfile)
+
+        cmd = "xxd -i {} > {}".format(rfile, cfile)
+
+        Environment.run_cmd(cmd)
+
+
+        ref_name = rfile.replace('/', '_').replace('-', '_').replace('.', '_')
+
+        header = ["#ifndef {}_h".format(gen_name),
+                  "#define {}_h".format(gen_name),
+                  "extern unsigned char {}[];".format(ref_name),
+                  "extern unsigned int {}_len;".format(ref_name),
+                  "#endif"]
+
+        header = '\n'.join(header)
 
         with open(hfile, 'w') as f:
             f.write(header)
 
-        code = ["{}* v_{} = {}_start;".format(op.t.c, self.outputs[0],gen_name)]
+        ofile = Environment.compile_object(cfile, self.temp_dir)
 
-        return code, obj_file, hfile
+
+        # TODO: Don't do memcpy. In that case just manipulate the pointer
+        code = ["memcpy(v_{0}, {1}, {1}_len);".format(self.outputs[0], ref_name)]
+
+
+        return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
 
 
 BaseGraphVisitor.register(ConstantVisitor)

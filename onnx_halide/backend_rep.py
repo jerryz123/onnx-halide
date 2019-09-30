@@ -34,7 +34,7 @@ class HalideBackendRep(BackendRep):
 
         value_info = {i.name: i.type for i in list(model.graph.input) +
                       list(model.graph.output) + list(model.graph.value_info)}
-        print(model.graph)
+
         code, objects, headers = visitor.visit(model.graph, value_info)
 
         code = ["#include {}".format(h) for h in headers] + \

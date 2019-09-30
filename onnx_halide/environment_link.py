@@ -46,13 +46,17 @@ class Environment:
         return src_aname
 
     @classmethod
-    def compile_raw_to_object(cls, raw_file: str, gen_name: str, temp_dir: str) -> str:
-        oname = join(temp_dir, "{}.o".format(gen_name))
-        cmd  = "{} --no-relax -r -b binary {} -o {} ".format(cls.target_ld, raw_file, oname)
+    def compile_object(cls, c_name: str, temp_dir: str) -> str:
+        o_name = c_name.replace(".c", ".o")
+
+        cmd  = "{} -std=c++11 ".format(cls.target_cxx)
+        cmd += "-I./ -fno-rtti "
+        cmd += cls.target_arch_triple
+        cmd += "-c {} -o {} ".format(c_name, o_name)
 
         r = Environment.run_cmd(cmd)
 
-        return oname
+        return o_name
 
     @classmethod
     def compile_kernel(cls, src: str, gen_name: str, temp_dir: str):

@@ -32,7 +32,6 @@ class HalideNodeVisitor(BaseNodeVisitor):
         pass
 
     def visit(self, node: NodeProto, value_info: Dict[str, TypeProto]) -> Tuple[List[str], Set[str], Set[str]]:
-        print(node)
         BaseNodeVisitor.visit(self, node, value_info)
 
 
