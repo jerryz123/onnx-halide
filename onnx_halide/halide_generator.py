@@ -35,20 +35,6 @@ class HalideNodeVisitor(BaseNodeVisitor):
         print(node)
         BaseNodeVisitor.visit(self, node, value_info)
 
-        for attr_name, (attr_k, attr_v, attr_def) in self.attr_fields.items():
-            for attr in node.attribute:
-                if attr.name == attr_k:
-                    v = getattr(attr, attr_v)
-                    if attr_v == "ints":
-                        v = list(v)
-                    elif attr_v == "s":
-                        v = v.decode()
-                    setattr(self, "{}_".format(attr_name),
-                            v)
-                    break
-            else:
-                setattr(self, "{}_".format(attr_name),
-                        attr_def)
 
         dim_vars = ["d{}".format(i) for i in range(self.n_dim_vars)]
 
@@ -58,7 +44,7 @@ class HalideNodeVisitor(BaseNodeVisitor):
             VI(value_info[i]).t.c,
             i,
             len(VI(value_info[i]).shape),
-            VI(value_info[i]).shape) for i in self.inputs])
+            VI(value_info[i]).shape) for i in self.inputs if i])
 
         output_decls = '\n'.join(["Output<Buffer<{0}>> v_{1}{{\"v_{1}\", {2}}};".format(
             VI(value_info[i]).t.c,
@@ -106,6 +92,8 @@ HALIDE_REGISTER_GENERATOR({0}, {0})
         haargs   = []
 
         for i in self.inputs + self.outputs:
+            if not i:
+                continue
             vi = VI(value_info[i])
             ctype = vi.t.c
             shape = vi.shape
@@ -206,6 +194,36 @@ class HalideCosVisitor(HalideUnaryVisitor):
     expr    = "cos({})"
 HalideGraphVisitor.register(HalideCosVisitor)
 
+class HalideCastVisitor(HalideUnaryVisitor):
+    op_type = "Cast"
+    attr_fields = {"to":("to", "i", None)}
+    @property
+    def expr(self):
+        return self.generate_cast(VI(self.value_info[self.outputs[0]]).t.c, "{}")
+HalideGraphVisitor.register(HalideCastVisitor)
+
+class HalideCeilVisitor(HalideUnaryVisitor):
+    op_type = "Ceil"
+    expr    = "ceil({})"
+HalideGraphVisitor.register(HalideCeilVisitor)
+
+class HalideClipVisitor(HalideUnaryVisitor):
+    op_type = "Clip"
+
+    @property
+    def expr(self):
+        min_v = None
+        max_v = None
+        n = len(self.inputs)
+        if n > 1 and self.inputs[1]:
+            min_v = "v_{}()".format(self.inputs[1])
+        if n > 2 and self.inputs[2]:
+            max_v = "v_{}()".format(self.inputs[2])
+        min_v = min_v or "Expr({})".format(min_v or VI(self.value_info[self.inputs[0]]).t.c_min)
+        max_v = max_v or "Expr({})".format(max_v or VI(self.value_info[self.inputs[0]]).t.c_max)
+        return "clamp({{}}, {}, {})".format(min_v, max_v)
+HalideGraphVisitor.register(HalideClipVisitor)
+
 class HalideBinaryVisitor(HalideNodeVisitor):
     def generate_alg(self, dim_vars):
         ip0 = VI(self.value_info[self.inputs[0]])
@@ -280,6 +298,7 @@ class HalideArgMVisitor(HalideNodeVisitor):
         expr = "{}({})[0]".format(self.argm_type, ip_expr)
         expr = self.generate_cast(op0.t.c, expr)
         return code + [self.generate_assign(op_expr, expr)]
+
 
 class HalideArgMaxVisitor(HalideArgMVisitor):
     op_type   = "ArgMax"
@@ -493,3 +512,31 @@ class HalideBatchNormVisitor(HalideNodeVisitor):
             "v_" + self.outputs[0],
             dim_vars), rhs)]
 HalideGraphVisitor.register(HalideBatchNormVisitor)
+
+class HalideConcatVisitor(HalideNodeVisitor):
+    op_type = "Concat"
+    attr_fields = {"axis" : ("axis", "i", 0)}
+
+
+    def generate_alg(self, dim_vars):
+        code = [self.generate_assign(
+            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            "undef<{}>()".format(VI(self.value_info[self.outputs[0]]).t.c))]
+        prev_s = 0
+        for i, ip in enumerate(self.inputs):
+            ipvi = VI(self.value_info[ip])
+
+            r_code, red_var = self.generate_rdom(str(i),
+                                                 [(prev_s, ipvi.shape[self.axis_])])
+            red_var = red_var[0]
+            code.append(r_code)
+            op_vars = list(dim_vars)
+            op_vars[self.axis_] = red_var
+            ip_vars = list(dim_vars)
+            ip_vars[self.axis_] = "{}-{}".format(red_var, prev_s)
+            prev_s += ipvi.shape[self.axis_]
+            code.append(self.generate_assign(
+                self.generate_funcref("v_" + self.outputs[0], op_vars),
+                self.generate_funcref("v_" + ip, ip_vars)))
+        return code
+HalideGraphVisitor.register(HalideConcatVisitor)

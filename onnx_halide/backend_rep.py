@@ -34,10 +34,11 @@ class HalideBackendRep(BackendRep):
 
         value_info = {i.name: i.type for i in list(model.graph.input) +
                       list(model.graph.output) + list(model.graph.value_info)}
-
+        print(model.graph)
         code, objects, headers = visitor.visit(model.graph, value_info)
 
-        code = ["#include {}".format(h) for h in headers] + code
+        code = ["#include {}".format(h) for h in headers] + \
+               code
 
         src = '\n'.join(code)
 
@@ -60,8 +61,8 @@ class HalideBackendRep(BackendRep):
 
             code.extend([
                 "{} v_{}[{}];".format(vi.t.c,
-                                    name,
-                                    '*'.join(map(str, vi.shape))),
+                                      name,
+                                      '*'.join(map(str, vi.shape)) if vi.shape else 1),
                 "FILE *{}_f = fopen(\"{}\", \"rb\");".format(name, raw_file),
                 "fread(&v_{0}, sizeof(v_{0}), 1, {0}_f);".format(name),
                 "fclose({}_f);".format(name),

@@ -1,10 +1,14 @@
-from .types import VI
 import os
-from os.path import join, abspath
 import subprocess
+import numpy as np
 
+from os.path import join, abspath
 from onnx.onnx_ml_pb2 import GraphProto, NodeProto, TypeProto
 from typing import Any, Dict, List, Set, Tuple
+
+from .types import VI
+from .environment_link import Environment
+
 class BaseVisitor:
     install_dir = os.environ['RISCV']
     cxx = "g++"
@@ -79,6 +83,7 @@ class BaseGraphVisitor(BaseVisitor):
         api_header = '\n'.join(["#ifndef {}_H".format(graph.name),
                                 "#define {}_H".format(graph.name),
                                 "#include <stdint.h>".format(graph.name),
+                                "#define float16_t uint16_t",
                                 "void {}({});".format(graph.name, ','.join(cargs)),
                                 "#endif"])
         api_header_fname = join(self.temp_dir, "{}.h".format(graph.name))
@@ -100,4 +105,63 @@ class BaseNodeVisitor(BaseVisitor):
         self.inputs  = list(node.input)
         self.outputs = list(node.output)
 
-        pass
+
+        for attr_name, (attr_k, attr_v, attr_def) in self.attr_fields.items():
+            for attr in node.attribute:
+                if attr.name == attr_k:
+                    v = getattr(attr, attr_v)
+                    if attr_v == "ints":
+                        v = list(v)
+                    elif attr_v == "s":
+                        v = v.decode()
+                    setattr(self, "{}_".format(attr_name),
+                            v)
+                    break
+            else:
+                setattr(self, "{}_".format(attr_name),
+                        attr_def)
+
+
+
+class ConstantVisitor(BaseNodeVisitor):
+    op_type = "Constant"
+    attr_fields = {"tensor":("value","t",None)}
+
+    def visit(self, node, value_info):
+        BaseNodeVisitor.visit(self, node, value_info)
+        op = VI(value_info[self.outputs[0]])
+        data = None
+        if self.tensor_.raw_data:
+            data = np.frombuffer(self.tensor_.raw_data,
+                                 count=op.size,
+                                 dtype=op.t.np)
+        else:
+            data = np.array(list(self.tensor_.float_data)) \
+                     .astype(op.t.np)
+            print(type(data.tobytes()))
+
+
+        gen_name = "constant_{}".format(self.outputs[0])
+        raw_file = join(self.temp_dir, "{}.raw".format(gen_name))
+        data.tofile(raw_file)
+        obj_file = Environment.compile_raw_to_object(raw_file, gen_name, self.temp_dir)
+
+        header = ["#ifndef {}_CONSTANT_H".format(self.outputs[0]),
+                  "#define {}_CONSTANT_H".format(self.outputs[0]),
+                  "#include <stdint.h>",
+                  "#define float16_t uint16_t",
+                  "extern const char {}_start;".format(gen_name),
+                  "#endif"]
+        header = '\n'.join(header)
+
+        hfile = join(self.temp_dir, "{}.h".format(gen_name))
+
+        with open(hfile, 'w') as f:
+            f.write(header)
+
+        code = ["{}* v_{} = {}_start;".format(op.t.c, self.outputs[0],gen_name)]
+
+        return code, obj_file, hfile
+
+
+BaseGraphVisitor.register(ConstantVisitor)

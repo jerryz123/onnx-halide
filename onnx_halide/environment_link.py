@@ -10,6 +10,7 @@ class Environment:
     '''
     cxx = "g++"
     target_cxx = "riscv64-unknown-linux-gnu-g++"
+    target_ld  = "riscv64-unknown-linux-gnu-ld"
     target_arch_triple = "-march=rv64imafdc -mabi=lp64 "
     install_dir = os.environ['RISCV']
 
@@ -43,6 +44,15 @@ class Environment:
             ' '.join([src_oname] + list(objects)))
         r = Environment.run_cmd(cmd)
         return src_aname
+
+    @classmethod
+    def compile_raw_to_object(cls, raw_file: str, gen_name: str, temp_dir: str) -> str:
+        oname = join(temp_dir, "{}.o".format(gen_name))
+        cmd  = "{} --no-relax -r -b binary {} -o {} ".format(cls.target_ld, raw_file, oname)
+
+        r = Environment.run_cmd(cmd)
+
+        return oname
 
     @classmethod
     def compile_kernel(cls, src: str, gen_name: str, temp_dir: str):
