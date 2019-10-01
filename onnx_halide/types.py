@@ -26,18 +26,18 @@ class MasterType:
 
 # TODO: are the min/max entries correct
 #            ONNX str |    c      |   numpy  |            min                   |              max
-TYPE_MAP = [("FLOAT16","float16_t",np.float16,""                                ,""),
-            ("FLOAT"  ,"float"    ,np.float32,""                                ,""),
-            ("DOUBLE" ,"double"   ,np.float64,""                                ,""),
-            ("BOOL"   ,"int8_t"   ,np.bool   ,""                                ,""),
-            ("UINT8"  ,"uint8_t"  ,np.uint8  ,""                                ,""),
-            ("INT8"   ,"int8_t"   ,np.int8   ,""                                ,""),
-            ("UINT16" ,"uint16_t" ,np.uint16 ,""                                ,""),
-            ("INT16"  ,"int16_t"  ,np.int16  ,""                                ,""),
-            ("UINT32" ,"uint32_t" ,np.uint32 ,""                                ,""),
-            ("INT32"  ,"int32_t"  ,np.int32  ,""                                ,""),
-            ("UINT64" ,"uint64_t" ,np.uint64 ,""                                ,""),
-            ("INT64"  ,"int64_t"  ,np.int64  ,""                                ,"")]
+TYPE_MAP = [("FLOAT16","float16_t",np.float16,"float16_t.make_infinity(0)"      ,"float16_t.make_infinity(1)"),
+            ("FLOAT"  ,"float"    ,np.float32,"-FLT_MAX"                        ,"FLT_MAX"),
+            ("DOUBLE" ,"double"   ,np.float64,"-DBL_MAX"                        ,"DBL_MAX"),
+            ("BOOL"   ,"char"     ,np.bool   ,""                                ,""),
+            ("UINT8"  ,"uint8_t"  ,np.uint8  ,"0"                               ,"UINT8_MAX"),
+            ("INT8"   ,"int8_t"   ,np.int8   ,"INT8_MIN"                        ,"INT8_MAX"),
+            ("UINT16" ,"uint16_t" ,np.uint16 ,"0"                               ,"UINT16_MAX"),
+            ("INT16"  ,"int16_t"  ,np.int16  ,"INT16_MIN"                       ,"INT16_MAX"),
+            ("UINT32" ,"uint32_t" ,np.uint32 ,"0"                               ,"UINT32_MAX"),
+            ("INT32"  ,"int32_t"  ,np.int32  ,"INT32_MIN"                       ,"INT32_MAX"),
+            ("UINT64" ,"uint64_t" ,np.uint64 ,"0"                               ,"UINT64_MAX"),
+            ("INT64"  ,"int64_t"  ,np.int64  ,"INT64_MIN"                       ,"INT64_MAX")]
 
 # TYPE_MAP = [("FLOAT16","float16_t",np.float16,"float16_t.make_infinity(0)"      ,"float16_t.make_infinity(1)"),
 #             ("FLOAT"  ,"float"    ,np.float32,"cast<float  >(Expr(-FLT_MAX))"   ,"cast<float  >(Expr(FLT_MAX))"),
@@ -62,7 +62,11 @@ class VI:
         return [d.dim_value for d in self.tensor_type.shape.dim]
 
     @property
+    def size(self) -> int:
+        return np.prod(self.shape)
+
+    @property
     def t(self) -> MasterType:
         return from_onnx_t(self.tensor_type.elem_type)
 
-    
+
