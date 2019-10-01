@@ -54,12 +54,18 @@ def from_onnx_t(onnx_t: int) -> MasterType:
     return MasterType.onnx_int_dict[onnx_t]
 
 class VI:
+    '''Wrapper class to access type and dimension properties'''
     def __init__(self, value_info: TypeProto) -> None:
         self.tensor_type = value_info.tensor_type
 
     @property
     def shape(self) -> List[int]:
         return [d.dim_value for d in self.tensor_type.shape.dim]
+
+    @property
+    def dims(self) -> int:
+        '''Number of dimensions associated with a tensor'''
+        return len(self.shape)
 
     @property
     def size(self) -> int:
