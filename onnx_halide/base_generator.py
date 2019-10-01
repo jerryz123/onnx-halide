@@ -173,6 +173,29 @@ class ConstantVisitor(BaseNodeVisitor):
 
 
         return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
-
-
 BaseGraphVisitor.register(ConstantVisitor)
+
+class ConstantOfShapeVisitor(BaseNodeVisitor):
+    op_type = "ConstantOfShape"
+    attr_fields = {"value":("value", "t", None)}
+
+    def visit(self, node, value_info):
+        BaseNodeVisitor.visit(self, node, value_info)
+        op = VI(value_info[self.outputs[0]])
+        if not self.value_:
+            value = np.array([0.0]).astype(float)
+        else:
+            data = None
+            # TODO fill out this switch
+            if op.t.c == "float":
+                data = self.value_.float_data
+            elif op.t.c == "int32_t":
+                data = self.value_.int32_data
+            value = np.array(data).astype(op.t.np)
+
+        code = ["for (size_t i = 0; i < {}; i++) v_{}[i] = {};".format(
+            np.prod(op.shape),
+            self.outputs[0],
+            value[0])]
+        return code, set(), set()
+BaseGraphVisitor.register(ConstantOfShapeVisitor)
