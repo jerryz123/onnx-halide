@@ -73,8 +73,8 @@ class HalideBackendRep(BackendRep):
             vi = VI(self.value_info[name])
             code.extend([
                 "{} v_{}[{}];".format(vi.t.c,
-                                    name,
-                                    '*'.join(map(str, vi.shape))),
+                                      name,
+                                      '*'.join(map(str, vi.shape)) if vi.shape else "1"),
                 ""])
             args.append("v_" + name)
 

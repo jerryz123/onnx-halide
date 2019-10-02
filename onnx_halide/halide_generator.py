@@ -228,6 +228,133 @@ class HalideClipVisitor(HalideUnaryVisitor):
         return "clamp({{}}, {}, {})".format(min_v, max_v)
 HalideGraphVisitor.register(HalideClipVisitor)
 
+class HalideDropoutVisitor(HalideUnaryVisitor):
+    op_type = "Dropout"
+    expr    = "{}"
+HalideGraphVisitor.register(HalideDropoutVisitor)
+
+class HalideEluVisitor(HalideUnaryVisitor):
+    op_type = "Elu"
+    attr_fields = {"alpha":("alpha", "f", 1.0)}
+    @property
+    def expr(self):
+        typ = VI(self.value_info[self.inputs[0]]).t.c
+        return "select({{0}}<0,cast<{}>(Expr({})*(exp({{0}})-Expr(1.))),{{0}})".format(
+            typ, self.alpha_)
+HalideGraphVisitor.register(HalideEluVisitor)
+
+class HalideExpVisitor(HalideUnaryVisitor):
+    op_type = "Exp"
+    expr    = "exp({})"
+HalideGraphVisitor.register(HalideExpVisitor)
+
+class HalideFloorVisitor(HalideUnaryVisitor):
+    op_type = "Floor"
+    expr    = "floor({})"
+HalideGraphVisitor.register(HalideFloorVisitor)
+
+class HalideHardSigmoidVisitor(HalideUnaryVisitor):
+    op_type = "HardSigmoid"
+    attr_fields = {"alpha":("alpha", "f", 0.2),
+                   "beta":("beta", "f", 0.5)}
+    @property
+    def expr(self):
+        op_type = VI(self.value_info[self.outputs[0]]).t.c
+        return "clamp({{}}*{0}+{1},0,1)".format(
+            self.generate_cast(op_type, "Expr({})".format(self.alpha_)),
+            self.generate_cast(op_type, "Expr({})".format(self.beta_)))
+HalideGraphVisitor.register(HalideHardSigmoidVisitor)
+
+class HalideIdentityVisitor(HalideUnaryVisitor):
+    op_type = "Identity"
+    expr    = "{}"
+HalideGraphVisitor.register(HalideIdentityVisitor)
+
+class HalideLeakyReluVisitor(HalideUnaryVisitor):
+    op_type = "LeakyRelu"
+    attr_fields = {"alpha":("alpha", "f", 0.01)}
+    @property
+    def expr(self):
+        op_type = VI(self.value_info[self.outputs[0]]).t.c
+        return "select({{0}}<0,{}*{{0}},{{0}})".format(
+            self.generate_cast(op_type, "Expr({})".format(self.alpha_)))
+HalideGraphVisitor.register(HalideLeakyReluVisitor)
+
+class HalideLogVisitor(HalideUnaryVisitor):
+    op_type = "Log"
+    expr    = "log({})"
+HalideGraphVisitor.register(HalideLogVisitor)
+
+class HalideNegVisitor(HalideUnaryVisitor):
+    op_type = "Neg"
+    expr    = "-{}"
+HalideGraphVisitor.register(HalideNegVisitor)
+
+class HalideNotVisitor(HalideUnaryVisitor):
+    op_type = "Not"
+    expr    = "cast<int8_t>({}==0)"
+HalideGraphVisitor.register(HalideNotVisitor)
+
+class HalideReciprocalVisitor(HalideUnaryVisitor):
+    op_type = "Reciprocal"
+    expr    = "1/{}"
+HalideGraphVisitor.register(HalideReciprocalVisitor)
+
+class HalideReluVisitor(HalideUnaryVisitor):
+    op_type = "Relu"
+    expr    = "select({0}>0,{0},0)"
+HalideGraphVisitor.register(HalideReluVisitor)
+
+class HalideRoundVisitor(HalideUnaryVisitor):
+    op_type = "Round"
+    expr    = "round({})"
+HalideGraphVisitor.register(HalideRoundVisitor)
+
+class HalideSigmoidVisitor(HalideUnaryVisitor):
+    op_type = "Sigmoid"
+    expr    = "(1/(1+exp(-{})))"
+HalideGraphVisitor.register(HalideSigmoidVisitor)
+
+class HalideSinVisitor(HalideUnaryVisitor):
+    op_type = "Sin"
+    expr    = "sin({})"
+HalideGraphVisitor.register(HalideSinVisitor)
+
+class HalideSoftplusVisitor(HalideUnaryVisitor):
+    op_type = "Softplus"
+    expr    = "log(exp({})+1)"
+HalideGraphVisitor.register(HalideSoftplusVisitor)
+
+class HalideSoftsignVisitor(HalideUnaryVisitor):
+    op_type = "Softsign"
+    expr    = "{0}/(1+abs({0}))"
+HalideGraphVisitor.register(HalideSoftsignVisitor)
+
+class HalideSqrtVisitor(HalideUnaryVisitor):
+    op_type = "Sqrt"
+    expr    = "sqrt({})"
+HalideGraphVisitor.register(HalideSqrtVisitor)
+
+class HalideTanVisitor(HalideUnaryVisitor):
+    op_type = "Tan"
+    expr    = "tan({})"
+HalideGraphVisitor.register(HalideTanVisitor)
+
+class HalideTanhVisitor(HalideUnaryVisitor):
+    op_type = "Tanh"
+    expr    = "tanh({})"
+HalideGraphVisitor.register(HalideTanhVisitor)
+
+class HalideThresholdedReluVisitor(HalideUnaryVisitor):
+    op_type = "ThresholdedRelu"
+    attr_fields = {"alpha":("alpha", "f", 1.0)}
+    @property
+    def expr(self):
+        op_type = VI(self.value_info[self.outputs[0]]).t.c
+        return "select({{0}}>{},{{0}},0)".format(
+            self.generate_cast(op_type, self.alpha_))
+HalideGraphVisitor.register(HalideThresholdedReluVisitor)
+
 class HalideBinaryVisitor(HalideNodeVisitor):
     def generate_alg(self, dim_vars):
         ip0 = VI(self.value_info[self.inputs[0]])
@@ -256,6 +383,26 @@ class HalideAndVisitor(HalideBinaryVisitor):
     op_type = "And"
     expr    = "({})&({})"
 HalideGraphVisitor.register(HalideAndVisitor)
+
+class HalideDivVisitor(HalideBinaryVisitor):
+    op_type = "Div"
+    expr    = "{}/{}"
+HalideGraphVisitor.register(HalideDivVisitor)
+
+class HalideMulVisitor(HalideBinaryVisitor):
+    op_type = "Mul"
+    expr    = "{}*{}"
+HalideGraphVisitor.register(HalideMulVisitor)
+
+class HalidePowVisitor(HalideBinaryVisitor):
+    op_type = "Pow"
+    expr    = "pow({},{})"
+HalideGraphVisitor.register(HalidePowVisitor)
+
+class HalideSubVisitor(HalideBinaryVisitor):
+    op_type = "Sub"
+    expr    = "{}-{}"
+HalideGraphVisitor.register(HalideSubVisitor)
 
 class HalideBitShiftVisitor(HalideBinaryVisitor):
     attr_fields = {"direction":("direction", "s", "")}
@@ -681,27 +828,115 @@ HalideGraphVisitor.register(HalideConcatVisitor)
 
 class HalideDepthToSpaceVisitor(HalideNodeVisitor):
     op_type = "DepthToSpace"
-    attr_fields = {"blocksize":("blocksize", "i", None)}
+    attr_fields = {"blocksize":("blocksize", "i", None),
+                   "mode":("mode", "s", "DCR")}
     def generate_alg(self, dim_vars):
         ip0 = VI(self.value_info[self.inputs[0]])
-        ip_vars = [dim_vars[0],
-                   "{}+({}%{})*{}+({}%{})*{}".format(
-                       dim_vars[1],
-                       dim_vars[3], self.blocksize_,
-                       ip0.shape[1] // (self.blocksize_**2),
-                       dim_vars[2], self.blocksize_,
-                       ip0.shape[1] // self.blocksize_),
-                   "cast<int>({}/{})".format(
-                       dim_vars[2],
-                       self.blocksize_),
-                   "cast<int>({}/{})".format(
-                       dim_vars[3],
-                       self.blocksize_)]
+        if self.mode_ == "DCR":
+            ip_vars = [dim_vars[0],
+                       "{}+({}%{})*{}+({}%{})*{}".format(
+                           dim_vars[1],
+                           dim_vars[3], self.blocksize_, ip0.shape[1] // (self.blocksize_**2),
+                           dim_vars[2], self.blocksize_, ip0.shape[1] // self.blocksize_),
+                       "cast<int>({}/{})".format(
+                           dim_vars[2], self.blocksize_),
+                       "cast<int>({}/{})".format(
+                           dim_vars[3], self.blocksize_)]
+        else:
+            ip_vars = [dim_vars[0],
+                       "({}%{})+({}%{})*{}+({}*{})".format(
+                           dim_vars[3], self.blocksize_,
+                           dim_vars[2], self.blocksize_, self.blocksize_,
+                           dim_vars[1], self.blocksize_**2),
+                       "cast<int>({}/{})".format(
+                           dim_vars[2], self.blocksize_),
+                       "cast<int>({}/{})".format(
+                           dim_vars[3], self.blocksize_)]
         return [self.generate_assign(self.generate_funcref("v_" + self.outputs[0],
                                                            dim_vars),
                                      self.generate_funcref("v_" + self.inputs[0],
                                                            ip_vars))]
 HalideGraphVisitor.register(HalideDepthToSpaceVisitor)
+
+class HalideDequantizeLinearVisitor(HalideNodeVisitor):
+    op_type = "DequantizeLinear"
+    def generate_alg(self, dim_vars):
+        rhs = self.generate_funcref("v_" + self.inputs[0], dim_vars)
+        if len(self.inputs) >= 3:
+            rhs = "({}-v_{}())".format(self.generate_cast(VI(self.value_info[self.outputs[0]]).t.c,
+                                                          rhs),
+                                       self.inputs[2])
+
+        rhs = "{}*v_{}()".format(rhs, self.inputs[1])
+        return [self.generate_assign(self.generate_funcref("v_" + self.outputs[0],
+                                                           dim_vars),
+                                     rhs)]
+HalideGraphVisitor.register(HalideDequantizeLinearVisitor)
+
+class HalideDynamicQuantizeLinearVisitor(HalideNodeVisitor):
+    op_type = "DynamicQuantizeLinear"
+    def generate_alg(self, dim_vars):
+        ip = VI(self.value_info[self.inputs[0]])
+
+        r_code, rdom = self.generate_rdom("r", [(0, i) for i in ip.shape])
+        code = [r_code,
+                self.generate_assign("Expr f_min",
+                                     "min(0, minimum({}))".format(
+                                         self.generate_funcref("v_" + self.inputs[0],
+                                                               rdom))),
+                self.generate_assign("Expr f_max",
+                                     "max(0, maximum({}))".format(
+                                         self.generate_funcref("v_" + self.inputs[0],
+                                                               rdom))),
+                self.generate_assign(self.generate_funcref("v_" + self.outputs[1], []),
+                                     "({} / {})".format(
+                                         self.generate_cast("float", "f_max - f_min"),
+                                         self.generate_cast("float", "255"))),
+                self.generate_assign(self.generate_funcref("v_" + self.outputs[2], []),
+                                     self.generate_cast("uint8_t",
+                                                        "clamp(round((0 - f_min) / {}), 0, 255)".format(
+                                                            self.generate_funcref("v_" + self.outputs[1], [])))),
+                self.generate_assign(self.generate_funcref("v_" + self.outputs[0],
+                                                           dim_vars),
+                                     "clamp({}, 0, 255)".format(self.generate_cast(
+                                         "uint8_t",
+                                         "round({} / {}) + {}".format(
+                                             self.generate_funcref("v_" + self.inputs[0], dim_vars),
+                                             self.generate_funcref("v_" + self.outputs[1], []),
+                                             self.generate_funcref("v_" + self.outputs[2], [])))))
+        ]
+
+        return code
+HalideGraphVisitor.register(HalideDynamicQuantizeLinearVisitor)
+
+class HalideVarVisitor(HalideNodeVisitor):
+    def generate_alg(self, dim_vars):
+        lhs = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        if len(self.inputs) == 1:
+            rhs = self.generate_funcref("v_" + self.inputs[0], dim_vars)
+        else:
+            ip_vars = []
+            for i in self.inputs:
+                ip = VI(self.value_info[i])
+                ip_vars.append([(dv if dim > 1 else "0") for dim, dv in\
+                                zip(ip.shape, dim_vars[-ip.dims:])])
+            rhs = self.generate_rhs(dim_vars, ip_vars)
+        return [self.generate_assign(lhs, rhs)]
+
+class HalideMinMaxVisitor(HalideVarVisitor):
+    def generate_rhs(self, dim_vars, ip_vars):
+        return "{}({})".format(
+            self.op_type.lower(),
+            ",".join([self.generate_funcref("v_" + ip, ipv) \
+                      for ip, ipv in zip(self.inputs, ip_vars)]))
+
+class HalideMaxVisitor(HalideMinMaxVisitor):
+    op_type = "Max"
+HalideGraphVisitor.register(HalideMaxVisitor)
+
+class HalideMinVisitor(HalideMinMaxVisitor):
+    op_type = "Min"
+HalideGraphVisitor.register(HalideMinVisitor)
 
 class HalidePadVisitor(HalideNodeVisitor):
     op_type = "Pad"
@@ -834,3 +1069,95 @@ class HalideReshapeGenerator(HalideNodeVisitor):
         assgn2 = self.generate_assign(op0_expr, self.generate_funcref(flattened_name, ["+".join(fl_vars)]))
         return [flattened_decl, assgn1, assgn2]
 HalideGraphVisitor.register(HalideReshapeGenerator)
+
+
+
+class HalideReduceVisitor(HalideNodeVisitor):
+    attr_fields = {"keepdims":("keepdims", "i"   , 1),
+                   "axes"    :("axes"    , "ints", None)}
+    def pp_attrs(self):
+        self.axes_ = self.axes_ or list(range(self.ip0.dims))
+    def generate_alg(self, dim_vars):
+        ip0 = VI(self.value_info[self.inputs[0]])
+        axes = self.axes_ or list(range(ip0.dims))
+        self.axes_ = axes
+        r_code, rdom = self.generate_rdom("r",
+                                          [(0, ip0.shape[i]) \
+                                           for i in axes])
+        red_vars = list(zip(axes, rdom))
+
+        if self.keepdims_:
+            zd_vars = list(zip([i for i in range(len(ip0.shape)) \
+                                if i not in axes],
+                               [dv for i, dv in enumerate(dim_vars) \
+                                if i not in axes]))
+        else:
+            zd_vars = list(zip([i for i in range(len(ip0.shape)) \
+                                if i not in axes],
+                               dim_vars))
+        ip_vars = [None] * ip0.dims
+        for i, rv in red_vars:
+            ip_vars[i] = rv
+        for i, dv in zd_vars:
+            ip_vars[i] = dv
+
+        return [r_code,
+                self.generate_assign(self.generate_funcref(
+                    "v_" + self.outputs[0], dim_vars),
+                                     self.expr.format(
+                                         self.generate_funcref(
+                                             "v_" + self.inputs[0], ip_vars)))]
+
+class HalideReduceL1Visitor(HalideReduceVisitor):
+    op_type = "ReduceL1"
+    expr    = "sum(abs({}))"
+HalideGraphVisitor.register(HalideReduceL1Visitor)
+
+class HalideReduceL2Visitor(HalideReduceVisitor):
+    op_type = "ReduceL2"
+    expr    = "sqrt(sum(pow({},2)))"
+HalideGraphVisitor.register(HalideReduceL2Visitor)
+
+class HalideReduceLogSumVisitor(HalideReduceVisitor):
+    op_type = "ReduceLogSum"
+    expr    = "log(sum({}))"
+HalideGraphVisitor.register(HalideReduceLogSumVisitor)
+
+class HalideReduceLogSumExpVisitor(HalideReduceVisitor):
+    op_type = "ReduceLogSumExp"
+    expr    = "log(sum(exp({})))"
+HalideGraphVisitor.register(HalideReduceLogSumExpVisitor)
+
+class HalideReduceMaxVisitor(HalideReduceVisitor):
+    op_type = "ReduceMax"
+    expr    = "maximum({})"
+HalideGraphVisitor.register(HalideReduceMaxVisitor)
+
+class HalideReduceMeanVisitor(HalideReduceVisitor):
+    op_type = "ReduceMean"
+    @property
+    def expr(self):
+        shape = self.value_info[self.inputs[0]].shape
+        return "sum({{}})/{}".format(
+            np.prod([shape[i] for i in self.axes_]))
+HalideGraphVisitor.register(HalideReduceMeanVisitor)
+
+class HalideReduceMinVisitor(HalideReduceVisitor):
+    op_type = "ReduceMin"
+    expr    = "minimum({})"
+HalideGraphVisitor.register(HalideReduceMinVisitor)
+
+class HalideReduceProdVisitor(HalideReduceVisitor):
+    op_type = "ReduceProd"
+    expr    = "product({})"
+HalideGraphVisitor.register(HalideReduceProdVisitor)
+
+class HalideReduceSumVisitor(HalideReduceVisitor):
+    op_type = "ReduceSum"
+    expr    = "sum({})"
+HalideGraphVisitor.register(HalideReduceSumVisitor)
+
+class HalideReduceSumSquareVisitor(HalideReduceVisitor):
+    op_type = "ReduceSumSquare"
+    expr    = "sum(pow({},2))"
+HalideGraphVisitor.register(HalideReduceSumSquareVisitor)
