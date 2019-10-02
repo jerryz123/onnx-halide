@@ -1064,6 +1064,39 @@ class HalideTransposeVisitor(HalideNodeVisitor):
         return [assgn]
 HalideGraphVisitor.register(HalideTransposeVisitor)
 
+class HalideSizeVisitor(HalideNodeVisitor):
+    op_type = "Size"
+
+    def generate_alg(self, dim_vars: List[str]):
+        ip0 = VI(self.value_info[self.inputs[0]])
+        op0 = VI(self.value_info[self.outputs[0]])
+        op0_expr = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        ip0_expr = self.generate_cast("int64_t", ip0.size)
+        assgn = self.generate_assign(op0_expr, ip0_expr)
+        return [assgn]
+HalideGraphVisitor.register(HalideSizeVisitor)
+
+class HalideSplitVisitor(HalideNodeVisitor):
+    op_type = "Split"
+    attr_fields = {"axis":("axis","i",0),
+                   "split":("split","ints",None)}
+
+    def generate_alg(self, dim_vars: List[str]):
+        s_sum = 0
+        code = []
+        ip0 = VI(self.value_info[self.inputs[0]])
+        self.split_ = self.split_ or [int(ip0.shape[self.axis_]//len(self.outputs))] * len(self.outputs)
+        for op, s in zip(self.outputs, self.split_):
+            ip_vars = dim_vars.copy()
+            ip_vars[self.axis_] += "+{}".format(s_sum)
+            op_expr = self.generate_funcref("v_" + op, dim_vars)
+            ip_expr = self.generate_funcref("v_" + self.inputs[0], ip_vars)
+            assgn = self.generate_assign(op_expr, ip_expr)
+            code.append(assgn)
+            s_sum += s
+        return code
+HalideGraphVisitor.register(HalideSplitVisitor)
+
 class HalideUnsqueezeGenerator(HalideNodeVisitor):
     op_type = "Unsqueeze"
     attr_fields = {"axes":("axes","ints",None)}
@@ -1114,7 +1147,6 @@ class HalideReshapeGenerator(HalideNodeVisitor):
         assgn2 = self.generate_assign(op0_expr, self.generate_funcref(flattened_name, ["+".join(fl_vars)]))
         return [flattened_decl, assgn1, assgn2]
 HalideGraphVisitor.register(HalideReshapeGenerator)
-
 
 
 class HalideReduceVisitor(HalideNodeVisitor):
