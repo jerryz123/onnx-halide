@@ -59,6 +59,33 @@ class Environment:
         return o_name
 
     @classmethod
+    def compile_constant_object(cls, name: str, array, temp_dir:str) -> str:
+        rfile = join(temp_dir, "{}.raw".format(name))
+        cfile = join(temp_dir, "{}.c".format(name))
+        hfile = join(temp_dir, "{}.h".format(name))
+        ofile = join(temp_dir, "{}.o".format(name))
+
+        array.tofile(rfile)
+
+        cmd = "xxd -i {} > {}".format(rfile, cfile)
+        Environment.run_cmd(cmd)
+
+        ref_name = rfile.replace('/','_') \
+                        .replace('-','_') \
+                        .replace('.','_')
+        header = ["#ifndef {}_h".format(name),
+                  "#define {}_h".format(name),
+                  "extern unsigned char {}[];".format(ref_name),
+                  "extern unsigned int {}_len;".format(ref_name),
+                  "#endif"]
+        header = '\n'.join(header)
+        with open(hfile, 'w') as f:
+            f.write(header)
+
+        ofile = Environment.compile_object(cfile, temp_dir)
+        return ofile, hfile, ref_name
+
+    @classmethod
     def compile_kernel(cls, src: str, gen_name: str, temp_dir: str):
         src_fname = join(temp_dir, "{}.cpp".format(gen_name))
         generator_bin = join(temp_dir, "{}.bin".format(gen_name))

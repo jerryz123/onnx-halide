@@ -140,33 +140,9 @@ class ConstantVisitor(BaseNodeVisitor):
             data = np.array(list(self.tensor_.float_data)) \
                      .astype(op.t.np)
 
-
         gen_name = "constant_{}".format(self.outputs[0])
-        rfile = join(self.temp_dir, "{}.raw".format(gen_name))
-        cfile = join(self.temp_dir, "{}.c".format(gen_name))
-        hfile = join(self.temp_dir, "{}.h".format(gen_name))
-
-        data.tofile(rfile)
-
-        cmd = "xxd -i {} > {}".format(rfile, cfile)
-
-        Environment.run_cmd(cmd)
-
-
-        ref_name = rfile.replace('/', '_').replace('-', '_').replace('.', '_')
-
-        header = ["#ifndef {}_h".format(gen_name),
-                  "#define {}_h".format(gen_name),
-                  "extern unsigned char {}[];".format(ref_name),
-                  "extern unsigned int {}_len;".format(ref_name),
-                  "#endif"]
-
-        header = '\n'.join(header)
-
-        with open(hfile, 'w') as f:
-            f.write(header)
-
-        ofile = Environment.compile_object(cfile, self.temp_dir)
+        ofile, hfile, ref_name = Environment.compile_constant_object(
+            gen_name, data, self.temp_dir)
 
 
         # TODO: Don't do memcpy. In that case just manipulate the pointer
@@ -193,10 +169,35 @@ class ConstantOfShapeVisitor(BaseNodeVisitor):
             elif op.t.c == "int32_t":
                 data = self.value_.int32_data
             value = np.array(data).astype(op.t.np)
+        data = np.full(op.shape, value)
 
-        code = ["for (size_t i = 0; i < {}; i++) v_{}[i] = {};".format(
-            np.prod(op.shape),
-            self.outputs[0],
-            value[0])]
-        return code, set(), set()
+        gen_name = "constant_{}".format(self.outputs[0])
+
+        ofile, hfile, ref_name = Environment.compile_constant_object(
+            gen_name, data, self.temp_dir)
+
+        code = ["memcpy(v_{0}, {1}, {1}_len);".format(
+            self.outputs[0], ref_name)]
+        return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
 BaseGraphVisitor.register(ConstantOfShapeVisitor)
+
+class EyeLikeVisitor(BaseNodeVisitor):
+    op_type = "EyeLike"
+    attr_fields = {"k":("k","i",0)}
+
+    def visit(self, node, value_info):
+        BaseNodeVisitor.visit(self, node, value_info)
+        op = VI(value_info[self.outputs[0]])
+
+        data = np.eye(op.shape[0],
+                      op.shape[1],
+                      k=self.k_,
+                      dtype=op.t.np)
+        gen_name = "eye_{}".format(self.outputs[0])
+        ofile, hfile, ref_name = Environment.compile_constant_object(
+            gen_name, data, self.temp_dir)
+
+        code = ["memcpy(v_{0}, {1}, {1}_len);".format(
+            self.outputs[0], ref_name)]
+        return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
+BaseGraphVisitor.register(EyeLikeVisitor)

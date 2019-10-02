@@ -939,6 +939,73 @@ class HalideDynamicQuantizeLinearVisitor(HalideNodeVisitor):
         return code
 HalideGraphVisitor.register(HalideDynamicQuantizeLinearVisitor)
 
+class HalideFlattenVisitor(HalideNodeVisitor):
+    op_type = "Flatten"
+    attr_fields = {"axis":("axis", "i", 1)}
+    def generate_alg(self, dim_vars):
+        ip = VI(self.value_info[self.inputs[0]])
+        op = VI(self.value_info[self.outputs[0]])
+        if self.axis_ == 0:
+            prevs = ip.shape[1:] + [1]
+            prods = [np.prod(prevs[i:]) for i in range(len(prevs))]
+            ip_vars = ["cast<int>(floor({}/{}))%{}".format(dim_vars[1], prod, ips) \
+                       for ips, prod in zip(ip.shape, prods)]
+        else:
+            pprevs = ip.shape[self.axis_:] + [1]
+            pprods = [np.prod(pprevs[i:]) for i in range(len(pprevs))]
+            fprevs = ip.shape[:self.axis_] + [1]
+            fprods = [np.prod(fprevs[i:]) for i in range(len(fprevs))]
+            ip_vars = ["cast<int>(floor({}/{}))%{}".format(dim_vars[0], prod, ips) \
+                       for ips, prod in zip(fprevs, fprods[1:])] \
+                    + ["cast<int>(floor({}/{}))%{}".format(dim_vars[1], prod, ips) \
+                       for ips, prod in zip(pprevs, pprods[1:])]
+        return [self.generate_assign(
+            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            self.generate_funcref("v_" + self.inputs[0], ip_vars))]
+HalideGraphVisitor.register(HalideFlattenVisitor)
+
+class HalideGatherVisitor(HalideNodeVisitor):
+    op_type = "Gather"
+    attr_fields = {"axis":("axis","i",0)}
+    def generate_alg(self, dim_vars):
+        ip0 = VI(self.value_info[self.inputs[0]])
+        ip1 = VI(self.value_info[self.inputs[1]])
+        op0 = VI(self.value_info[self.outputs[0]])
+
+        id_vars = dim_vars[self.axis_:self.axis_+ip1.dims]
+        ip_vars = dim_vars[:self.axis_] \
+                  + [self.generate_cast(
+                      "int",
+                      "{}%{}".format(
+                          self.generate_funcref("v_" + self.inputs[1], id_vars),
+                          ip0.shape[self.axis_]))] \
+                  + dim_vars[ip1.dims+self.axis_:]
+        return [self.generate_assign(
+            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            self.generate_funcref("v_" + self.inputs[0], ip_vars))]
+HalideGraphVisitor.register(HalideGatherVisitor)
+
+class HalideGatherElementsVisitor(HalideNodeVisitor):
+    op_type = "GatherElements"
+    attr_fields = {"axis":("axis","i",0)}
+    def generate_alg(self, dim_vars):
+        ip0 = VI(self.value_info[self.inputs[0]])
+        ip1 = VI(self.value_info[self.inputs[1]])
+        op0 = VI(self.value_info[self.outputs[0]])
+
+        ip_vars = [dv if axis != self.axis_ else \
+                   self.generate_cast(
+                       "int",
+                       "{}%{}".format(
+                           self.generate_funcref("v_" + self.inputs[1], dim_vars),
+                           ip0.shape[self.axis_])) \
+                   for axis, dv in enumerate(dim_vars)]
+
+        return [self.generate_assign(
+            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            self.generate_funcref("v_" + self.inputs[0], ip_vars))]
+HalideGraphVisitor.register(HalideGatherElementsVisitor)
+
 class HalideVarVisitor(HalideNodeVisitor):
     def generate_alg(self, dim_vars):
         lhs = self.generate_funcref("v_" + self.outputs[0], dim_vars)
