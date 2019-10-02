@@ -62,10 +62,11 @@ class BaseGraphVisitor(BaseVisitor):
 
             for op in list(node.output):
                 if op not in outputs:
+                    op_shape = VI(value_info[op]).shape
                     code.append("  {} v_{}[{}];".format(
                         VI(value_info[op]).t.c,
                         op,
-                        "*".join(VI(value_info[op]).shape)))
+                        "*".join(op_shape) if op_shape else "1"))
 
             for c in node_code:
                 code.append("  " + c)

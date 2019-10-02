@@ -243,6 +243,11 @@ class HalideEluVisitor(HalideUnaryVisitor):
             typ, self.alpha_)
 HalideGraphVisitor.register(HalideEluVisitor)
 
+class HalideErfVisitor(HalideUnaryVisitor):
+    op_type = "Erf"
+    expr    = "erf({})"
+HalideGraphVisitor.register(HalideErfVisitor)
+
 class HalideExpVisitor(HalideUnaryVisitor):
     op_type = "Exp"
     expr    = "exp({})"
@@ -413,6 +418,31 @@ class HalideBitShiftVisitor(HalideBinaryVisitor):
     def expr(self):
         return "{}<<{}" if self.direction_ == "LEFT" else "{}>>{}"
 HalideGraphVisitor.register(HalideBitShiftVisitor)
+
+class HalideEqualVisitor(HalideBinaryVisitor):
+    op_type = "Equal"
+    expr    = "cast<uint8_t>({}=={})"
+HalideGraphVisitor.register(HalideEqualVisitor)
+
+class HalideGreaterVisitor(HalideBinaryVisitor):
+    op_type = "Greater"
+    expr    = "cast<uint8_t>({}>{})"
+HalideGraphVisitor.register(HalideGreaterVisitor)
+
+class HalideLessVisitor(HalideBinaryVisitor):
+    op_type = "Less"
+    expr    = "cast<uint8_t>({}<{})"
+HalideGraphVisitor.register(HalideLessVisitor)
+
+class HalideOrVisitor(HalideBinaryVisitor):
+    op_type = "Or"
+    expr    = "cast<uint8_t>({}|{})"
+HalideGraphVisitor.register(HalideOrVisitor)
+
+class HalideXorVisitor(HalideBinaryVisitor):
+    op_type = "Xor"
+    expr    = "cast<uint8_t>({}^{})"
+HalideGraphVisitor.register(HalideXorVisitor)
 
 class HalideArgMVisitor(HalideNodeVisitor):
     attr_fields = {"keepdims":("keepdims", "i", 1),
@@ -981,6 +1011,21 @@ class HalidePadVisitor(HalideNodeVisitor):
         return code
 HalideGraphVisitor.register(HalidePadVisitor)
 
+class HalideQuantizeLinearVisitor(HalideNodeVisitor):
+    op_type = "QuantizeLinear"
+    def generate_alg(self, dim_vars):
+        zero_point = self.generate_funcref("v_" + self.inputs[2], []) \
+                     if len(self.inputs) >= 3 and self.inputs[2] else "0"
+        op_type = VI(self.value_info[self.outputs[0]]).t.c
+        return [self.generate_assign(
+            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            self.generate_cast(op_type,
+                               "clamp(round({}/{}) + {}, 0, 255)".format(
+                                   self.generate_funcref(
+                                       "v_" + self.inputs[0], dim_vars),
+                                   self.generate_funcref("v_" + self.inputs[1], []),
+                                   zero_point)))]
+HalideGraphVisitor.register(HalideQuantizeLinearVisitor)
 
 class HalideSqueezeVisitor(HalideNodeVisitor):
     op_type = "Squeeze"
