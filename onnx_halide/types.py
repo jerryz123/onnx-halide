@@ -29,7 +29,7 @@ class MasterType:
 TYPE_MAP = [("FLOAT16","float16_t",np.float16,"float16_t.make_infinity(0)"      ,"float16_t.make_infinity(1)"),
             ("FLOAT"  ,"float"    ,np.float32,"-FLT_MAX"                        ,"FLT_MAX"),
             ("DOUBLE" ,"double"   ,np.float64,"-DBL_MAX"                        ,"DBL_MAX"),
-            ("BOOL"   ,"char"     ,np.bool   ,""                                ,""),
+            ("BOOL"   ,"uint8_t"  ,np.bool   ,""                                ,""),
             ("UINT8"  ,"uint8_t"  ,np.uint8  ,"0"                               ,"UINT8_MAX"),
             ("INT8"   ,"int8_t"   ,np.int8   ,"INT8_MIN"                        ,"INT8_MAX"),
             ("UINT16" ,"uint16_t" ,np.uint16 ,"0"                               ,"UINT16_MAX"),

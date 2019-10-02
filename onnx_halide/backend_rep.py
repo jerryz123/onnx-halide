@@ -31,7 +31,6 @@ class HalideBackendRep(BackendRep):
                                           count=np.prod(dims),
                                           dtype=from_onnx_t(init.data_type).np)
 
-
         value_info = {i.name: i.type for i in list(model.graph.input) +
                       list(model.graph.output) + list(model.graph.value_info)}
 
@@ -74,8 +73,8 @@ class HalideBackendRep(BackendRep):
             vi = VI(self.value_info[name])
             code.extend([
                 "{} v_{}[{}];".format(vi.t.c,
-                                    name,
-                                    '*'.join(map(str, vi.shape))),
+                                      name,
+                                      '*'.join(map(str, vi.shape)) if vi.shape else "1"),
                 ""])
             args.append("v_" + name)
 
@@ -107,7 +106,7 @@ class HalideBackendRep(BackendRep):
 
         src = '\n'.join(code)
         Environment.run_model(src, self.library, self.temp_dir)
-        
+
         ret = []
         for op in list(self.model.graph.output):
             name = op.name
