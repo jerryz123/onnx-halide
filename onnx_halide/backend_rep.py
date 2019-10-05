@@ -23,13 +23,14 @@ class HalideBackendRep(BackendRep):
                                       model.domain.replace('.', '-'))
 
         visitor = HalideGraphVisitor(temp_dir=temp_dir)
-
+        self.initializer_data = {}
         for init in model.graph.initializer:
             dims = list(init.dims)
             if init.raw_data:
                 onnx_data = np.frombuffer(init.raw_data,
                                           count=np.prod(dims),
                                           dtype=from_onnx_t(init.data_type).np)
+                self.initializer_data[init.name] = onnx_data
 
         value_info = {i.name: i.type for i in list(model.graph.input) +
                       list(model.graph.output) + list(model.graph.value_info)}
@@ -52,7 +53,7 @@ class HalideBackendRep(BackendRep):
         args = []
         for i, ip in enumerate(list(self.model.graph.input)):
             name = ip.name
-            array = inputs[i]
+            array = self.initializer_data[name] if name in self.initializer_data else inputs[i]
             vi = VI(self.value_info[name])
 
             raw_file = join(self.temp_dir, "{}.raw".format(name))

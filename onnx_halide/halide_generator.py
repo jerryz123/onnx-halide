@@ -49,7 +49,7 @@ class HalideNodeVisitor(BaseNodeVisitor):
             VI(value_info[i]).t.c,
             i,
             len(VI(value_info[i]).shape),
-            VI(value_info[i]).shape) for i in self.outputs])
+            VI(value_info[i]).shape) for i in self.outputs if i in value_info])
 
         dim_var_decls = '\n'.join(["Var {};".format(d) for d in dim_vars])
 
@@ -91,7 +91,7 @@ HALIDE_REGISTER_GENERATOR({0}, {0})
         haargs   = []
 
         for i in self.inputs + self.outputs:
-            if not i:
+            if not i or i not in value_info:
                 continue
             vi = VI(value_info[i])
             ctype = vi.t.c
