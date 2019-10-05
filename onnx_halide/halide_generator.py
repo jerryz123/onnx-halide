@@ -655,7 +655,7 @@ class HalideBaseConvVisitor(HalideNodeVisitor):
 
         padded_expr = self.generate_funcref(padded, ip_vars)
 
-        bias_expr = self.generate_bias(dim_vars[1])
+        bias_expr = self.generate_bias([dim_vars[1]])
 
         w_expr = self.generate_funcref("v_" + self.inputs[1], w_vars)
 
@@ -668,8 +668,7 @@ class HalideBaseConvVisitor(HalideNodeVisitor):
 
 class HalideConvVisitor(HalideBaseConvVisitor):
     op_type     = "Conv"
-
-    def generate_bias(self, dim_var):
+    def generate_bias(self, dim_vars):
         if len(self.inputs) == 3:
             return self.generate_funcref("v_" + self.inputs[2], dim_vars)
         else:
