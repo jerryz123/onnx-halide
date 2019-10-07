@@ -61,12 +61,12 @@ class BaseGraphVisitor(BaseVisitor):
             self.headers |= headers
 
             for op in list(node.output):
-                if op not in outputs:
+                if op not in outputs and op in value_info:
                     op_shape = VI(value_info[op]).shape
-                    code.append("  {} v_{}[{}];".format(
+                    code.append("  {0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(
                         VI(value_info[op]).t.c,
                         op,
-                        "*".join(op_shape) if op_shape else "1"))
+                        "*".join(map(str, op_shape)) if op_shape else "1"))
 
             for c in node_code:
                 code.append("  " + c)

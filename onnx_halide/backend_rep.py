@@ -23,13 +23,14 @@ class HalideBackendRep(BackendRep):
                                       model.domain.replace('.', '-'))
 
         visitor = HalideGraphVisitor(temp_dir=temp_dir)
-
+        self.initializer_data = {}
         for init in model.graph.initializer:
             dims = list(init.dims)
             if init.raw_data:
                 onnx_data = np.frombuffer(init.raw_data,
                                           count=np.prod(dims),
                                           dtype=from_onnx_t(init.data_type).np)
+                self.initializer_data[init.name] = onnx_data
 
         value_info = {i.name: i.type for i in list(model.graph.input) +
                       list(model.graph.output) + list(model.graph.value_info)}
@@ -52,18 +53,19 @@ class HalideBackendRep(BackendRep):
         args = []
         for i, ip in enumerate(list(self.model.graph.input)):
             name = ip.name
-            array = inputs[i]
+            array = self.initializer_data[name] if name in self.initializer_data else inputs[i]
             vi = VI(self.value_info[name])
 
             raw_file = join(self.temp_dir, "{}.raw".format(name))
             array.tofile(raw_file)
 
+            # Who needs a free() when you can just kill the program?
             code.extend([
-                "{} v_{}[{}];".format(vi.t.c,
+                "{0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(vi.t.c,
                                       name,
                                       '*'.join(map(str, vi.shape)) if vi.shape else 1),
                 "FILE *{}_f = fopen(\"{}\", \"rb\");".format(name, raw_file),
-                "fread(&v_{0}, sizeof(v_{0}), 1, {0}_f);".format(name),
+                "fread(v_{0}, {1}*sizeof({2}), 1, {0}_f);".format(name, '*'.join(map(str, vi.shape)) if vi.shape else 1, vi.t.c),
                 "fclose({}_f);".format(name),
                 ""])
             args.append("v_" + name)
@@ -72,7 +74,7 @@ class HalideBackendRep(BackendRep):
             name = op.name
             vi = VI(self.value_info[name])
             code.extend([
-                "{} v_{}[{}];".format(vi.t.c,
+                "{0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(vi.t.c,
                                       name,
                                       '*'.join(map(str, vi.shape)) if vi.shape else "1"),
                 ""])
@@ -93,7 +95,7 @@ class HalideBackendRep(BackendRep):
 
             code.extend([
                 "FILE *{}_f = fopen(\"{}\", \"wb\");".format(name, raw_file),
-                "fwrite(&v_{0}, sizeof(v_{0}), 1, {0}_f);".format(name),
+                "fwrite(v_{0}, {1}*sizeof({2}), 1, {0}_f);".format(name, '*'.join(map(str, vi.shape)) if vi.shape else "1", vi.t.c),
                 "fclose({}_f);".format(name),
                 ""])
         code.append("return 0;")
