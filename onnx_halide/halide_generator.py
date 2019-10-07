@@ -1209,7 +1209,7 @@ class HalideGemmVisitor(HalideNodeVisitor):
                                              self.generate_funcref("v_" + self.inputs[2],
                                                                    [dv if cs > 1 else "0" \
                                                                     for dv, cs \
-                                                                    in zip(dim_vars, C.shape)]))
+                                                                    in zip(dim_vars[-C.dims:], C.shape)]))
         else:
             nc_assign = ""
 
