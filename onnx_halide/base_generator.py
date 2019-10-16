@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Set, Tuple
 
 from .types import VI
 from .environment_link import Environment
+from .buffer_manager import NaiveBufferManager
 
 class BaseVisitor:
     install_dir = os.environ['RISCV']
@@ -52,7 +53,7 @@ class BaseGraphVisitor(BaseVisitor):
         name = graph.name
 
         code = []
-
+        buffer_manager = NaiveBufferManager(value_info)
         for node in graph.node:
             node_outputs = list(node.output)
             generator = self.node_lookup[node.op_type](temp_dir=self.temp_dir)
@@ -62,11 +63,7 @@ class BaseGraphVisitor(BaseVisitor):
 
             for op in list(node.output):
                 if op not in outputs and op in value_info:
-                    op_shape = VI(value_info[op]).shape
-                    code.append("  {0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(
-                        VI(value_info[op]).t.c,
-                        op,
-                        "*".join(map(str, op_shape)) if op_shape else "1"))
+                    code.append(buffer_manager.allocate_buffer(op))
 
             for c in node_code:
                 code.append("  " + c)
