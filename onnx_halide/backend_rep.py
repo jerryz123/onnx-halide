@@ -46,29 +46,39 @@ class HalideBackendRep(BackendRep):
         self.value_info = value_info
         self.temp_dir   = temp_dir
         self.headers    = headers
-        self.library    = Environment.compile_library(src, objects, self.temp_dir)
+        self.libraries    = set([Environment.compile_library(src, objects, self.temp_dir)])
 
     def run(self, inputs: List[ndarray], **kwargs) -> List[ndarray]:
         code = []
         args = []
-        for i, ip in enumerate(list(self.model.graph.input)):
+        # Initializer inputs don't always come after data inputs, so we track idx separateley
+        input_index = 0
+        for ip in self.model.graph.input:
             name = ip.name
-            array = self.initializer_data[name] if name in self.initializer_data else inputs[i]
             vi = VI(self.value_info[name])
+            print(name)
+            if name in self.initializer_data:
+                ofile, hfile, ref_name = Environment.compile_constant_object(name, self.initializer_data[name], self.temp_dir)
+                self.headers.add("\"{}\"".format(hfile))
+                self.libraries.add(ofile)
+                args.append("({} *) {}".format(vi.t.c, ref_name))
+            else:
+                array = inputs[input_index]
+                input_index += 1
 
-            raw_file = join(self.temp_dir, "{}.raw".format(name))
-            array.tofile(raw_file)
+                raw_file = join(self.temp_dir, "{}.raw".format(name))
+                array.tofile(raw_file)
 
-            # Who needs a free() when you can just kill the program?
-            code.extend([
-                "{0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(vi.t.c,
-                                      name,
-                                      '*'.join(map(str, vi.shape)) if vi.shape else 1),
-                "FILE *{}_f = fopen(\"{}\", \"rb\");".format(name, raw_file),
-                "fread(v_{0}, {1}*sizeof({2}), 1, {0}_f);".format(name, '*'.join(map(str, vi.shape)) if vi.shape else 1, vi.t.c),
-                "fclose({}_f);".format(name),
-                ""])
-            args.append("v_" + name)
+                # Who needs a free() when you can just kill the program?
+                code.extend([
+                    "{0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(vi.t.c,
+                                        name,
+                                        '*'.join(map(str, vi.shape)) if vi.shape else 1),
+                    "FILE *{}_f = fopen(\"{}\", \"rb\");".format(name, raw_file),
+                    "fread(v_{0}, {1}*sizeof({2}), 1, {0}_f);".format(name, '*'.join(map(str, vi.shape)) if vi.shape else 1, vi.t.c),
+                    "fclose({}_f);".format(name),
+                    ""])
+                args.append("v_" + name)
 
         for o, op in enumerate(list(self.model.graph.output)):
             name = op.name
@@ -107,7 +117,8 @@ class HalideBackendRep(BackendRep):
                ["};"]
 
         src = '\n'.join(code)
-        Environment.run_model(src, self.library, self.temp_dir)
+        print("Compilation finished... running model")
+        Environment.run_model(src, self.libraries, self.temp_dir)
 
         ret = []
         for op in list(self.model.graph.output):
