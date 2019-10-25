@@ -71,24 +71,24 @@ class HalideBackendRep(BackendRep):
 
                 # Who needs a free() when you can just kill the program?
                 code.extend([
-                    "{0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(vi.t.c,
+                    "{0}* {1} = ({0}*) malloc({2}*sizeof({0}));".format(vi.t.c,
                                         name,
                                         '*'.join(map(str, vi.shape)) if vi.shape else 1),
                     "FILE *{}_f = fopen(\"{}\", \"rb\");".format(name, raw_file),
-                    "fread(v_{0}, {1}*sizeof({2}), 1, {0}_f);".format(name, '*'.join(map(str, vi.shape)) if vi.shape else 1, vi.t.c),
+                    "fread({0}, {1}*sizeof({2}), 1, {0}_f);".format(name, '*'.join(map(str, vi.shape)) if vi.shape else 1, vi.t.c),
                     "fclose({}_f);".format(name),
                     ""])
-                args.append("v_" + name)
+                args.append(name)
 
         for o, op in enumerate(list(self.model.graph.output)):
             name = op.name
             vi = VI(self.value_info[name])
             code.extend([
-                "{0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(vi.t.c,
+                "{0}* {1} = ({0}*) malloc({2}*sizeof({0}));".format(vi.t.c,
                                       name,
                                       '*'.join(map(str, vi.shape)) if vi.shape else "1"),
                 ""])
-            args.append("v_" + name)
+            args.append(name)
 
         code.extend(["{}({});".format(self.model.graph.name, ','.join(args)), ""])
 
@@ -105,7 +105,7 @@ class HalideBackendRep(BackendRep):
 
             code.extend([
                 "FILE *{}_f = fopen(\"{}\", \"wb\");".format(name, raw_file),
-                "fwrite(v_{0}, {1}*sizeof({2}), 1, {0}_f);".format(name, '*'.join(map(str, vi.shape)) if vi.shape else "1", vi.t.c),
+                "fwrite({0}, {1}*sizeof({2}), 1, {0}_f);".format(name, '*'.join(map(str, vi.shape)) if vi.shape else "1", vi.t.c),
                 "fclose({}_f);".format(name),
                 ""])
         code.append("return 0;")

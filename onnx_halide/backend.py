@@ -46,7 +46,10 @@ class HalideBackend(Backend):
         # For production ready (tm) code this probably needs to be more robust
         # Maybe just use escaped utf encoding or hash it
         # Must be an idempotent operation
-        return re.sub(r"[!@#/$%^&*()\-+\[\]]", "_", str)
+        scrubbed = re.sub(r"[!@#/$%^&*()\-+\[\]]", "_", str)
+        if scrubbed[:2] != "v_":
+            scrubbed = "v_" + scrubbed
+        return scrubbed
 
     @classmethod
     def sanitize_model(cls, model: ModelProto) -> ModelProto:

@@ -72,7 +72,7 @@ class BaseGraphVisitor(BaseVisitor):
         for vi in list(graph.input) + list(graph.output):
             name = vi.name
             vi   = VI(vi.type)
-            cargs.append("{}* v_{}".format(vi.t.c, name))
+            cargs.append("{}* {}".format(vi.t.c, name))
 
         code = ["void {}({}) {{".format(graph.name, ','.join(cargs))] + \
                code + \
@@ -143,7 +143,7 @@ class ConstantVisitor(BaseNodeVisitor):
 
 
         # TODO: Don't do memcpy. In that case just manipulate the pointer
-        code = ["memcpy(v_{0}, {1}, {1}_len);".format(self.outputs[0], ref_name)]
+        code = ["memcpy({0}, {1}, {1}_len);".format(self.outputs[0], ref_name)]
 
 
         return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
@@ -173,7 +173,7 @@ class ConstantOfShapeVisitor(BaseNodeVisitor):
         ofile, hfile, ref_name = Environment.compile_constant_object(
             gen_name, data, self.temp_dir)
 
-        code = ["memcpy(v_{0}, {1}, {1}_len);".format(
+        code = ["memcpy({0}, {1}, {1}_len);".format(
             self.outputs[0], ref_name)]
         return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
 BaseGraphVisitor.register(ConstantOfShapeVisitor)
@@ -194,7 +194,7 @@ class EyeLikeVisitor(BaseNodeVisitor):
         ofile, hfile, ref_name = Environment.compile_constant_object(
             gen_name, data, self.temp_dir)
 
-        code = ["memcpy(v_{0}, {1}, {1}_len);".format(
+        code = ["memcpy({0}, {1}, {1}_len);".format(
             self.outputs[0], ref_name)]
         return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
 BaseGraphVisitor.register(EyeLikeVisitor)
