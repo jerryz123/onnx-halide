@@ -112,7 +112,7 @@ class Environment:
         r = subprocess.run(cmd, check=True, shell=True)
 
     @classmethod
-    def run_model(cls, src: str, library_name: str, temp_dir: str) -> str:
+    def run_model(cls, src: str, library_names: List[str], temp_dir: str) -> str:
         src_fname = join(temp_dir, "main.c")
         src_bname = join(temp_dir, "main.riscv")
         with open(src_fname, 'w') as f:
@@ -121,7 +121,7 @@ class Environment:
         cmd  = "{} -std=c++11 ".format(cls.target_cxx)
         cmd += "-fno-rtti -static "
         cmd += cls.target_arch_triple
-        cmd += "{} {} -latomic -lpthread -ldl -o {} ".format(src_fname, library_name, src_bname)
+        cmd += "{} {} -latomic -lpthread -ldl -o {} ".format(src_fname, ' '.join(library_names), src_bname)
         r = Environment.run_cmd(cmd)
 
         cmd  = "spike pk {}".format(src_bname)
