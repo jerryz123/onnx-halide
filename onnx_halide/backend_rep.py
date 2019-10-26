@@ -16,21 +16,24 @@ from onnx.onnx_ml_pb2 import ModelProto
 from typing import List, Type
 
 class HalideBackendRep(BackendRep):
-    def __init__(self, model: ModelProto, temp_dir: str = "build", visitor: Type[HalideGraphVisitor] = HalideGraphVisitor) -> None:
+    def __init__(self, model: ModelProto, temp_dir: str = "build", visitor: Type[HalideGraphVisitor] = HalideGraphVisitor, debug = True) -> None:
         temp_dir = abspath(temp_dir)
+        self.debug = debug
         self.name = "{}_{}_{}".format(model.graph.name,
                                       model.model_version,
                                       model.domain.replace('.', '-'))
 
-        visitor = HalideGraphVisitor(temp_dir=temp_dir)
+        visitor = HalideGraphVisitor(temp_dir=temp_dir, debug=debug)
         self.initializer_data = {}
         for init in model.graph.initializer:
-            dims = list(init.dims)
             if init.raw_data:
                 onnx_data = np.frombuffer(init.raw_data,
-                                          count=np.prod(dims),
+                                          count=np.prod(list(init.dims)),
                                           dtype=from_onnx_t(init.data_type).np)
                 self.initializer_data[init.name] = onnx_data
+            else:
+                ttype = from_onnx_t(init.data_type)
+                self.initializer_data[init.name] = np.array(getattr(init, "{}_data".format(ttype.onnx_str.lower())), dtype=ttype.np)
 
         value_info = {i.name: i.type for i in list(model.graph.input) +
                       list(model.graph.output) + list(model.graph.value_info)}
