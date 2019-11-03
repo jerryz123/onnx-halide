@@ -2,6 +2,7 @@ import subprocess
 import os
 from os.path import join
 from typing import List, Type
+import re
 
 class Environment:
     ''' Provide an interface for making external calls to compilers/linkers.
@@ -126,5 +127,39 @@ class Environment:
 
         cmd  = "spike pk {}".format(src_bname)
         r = Environment.run_cmd(cmd)
-            
 
+    @classmethod
+    def get_debug_header(cls, temp_dir: str):
+        headers = """
+#include <stdlib.h>
+#include <malloc.h>
+#include <time.h>
+#include "util.h"
+#include <stdio.h>
+"""
+
+        rdcycle = """
+inline int __attribute__((optimize("O0"))) rd_cycle() {
+    int out = 0;
+    asm("rdcycle %0" : "=r" (out));
+    return out;
+}
+"""
+
+        hname = "onnx_composer_debug"
+        src = "#ifndef ONNX_COMPOSER_DEBUG\n#define ONNX_COMPOSER_DEBUG{}\n#endif".format(rdcycle)
+        hfile = join(temp_dir, "{}.h".format(hname))
+        with open(hfile, 'w') as f:
+            f.write(src)
+        return hfile
+    
+
+    @classmethod
+    def sanitize_string(cls, str) -> str:
+        # For production ready (tm) code this probably needs to be more robust
+        # Maybe just use escaped utf encoding or hash it
+        # Must be an idempotent operation
+        scrubbed = re.sub(r"[!@#/$%^&*()\-+\[\]]", "_", str)
+        if scrubbed[:2] != "v_":
+            scrubbed = "v_" + scrubbed
+        return scrubbed

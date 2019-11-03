@@ -27,9 +27,8 @@ class NaiveBufferManager(BufferManager):
     '''Allocate a new buffer for each output'''
 
     def allocate_buffer(self, op: str) -> str:
-        '''Prefix with a v_ to avoid invalid token in C'''
         op_shape = VI(self.value_info[op]).shape
-        return "  {0}* v_{1} = ({0}*) malloc({2}*sizeof({0}));".format(
+        return "  {0}* {1} = ({0}*) malloc({2}*sizeof({0}));".format(
             VI(self.value_info[op]).t.c,
             op,
             "*".join(map(str, op_shape)) if op_shape else "1")

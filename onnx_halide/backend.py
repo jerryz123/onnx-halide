@@ -3,10 +3,10 @@ import onnx
 import onnx.utils
 from onnx.backend.base import Backend
 from onnx import helper, TensorProto, shape_inference
-import re
 
 import subprocess
 from .backend_rep import HalideBackendRep
+from .environment_link import Environment
 
 from onnx.onnx_ml_pb2 import ModelProto
 from onnx_halide.backend_rep import HalideBackendRep
@@ -42,27 +42,21 @@ class HalideBackend(Backend):
         return HalideBackendRep(onnx.utils.polish_model(cls.sanitize_model(model)))
 
     @classmethod
-    def sanitize_string(cls, str) -> str:
-        # For production ready (tm) code this probably needs to be more robust
-        # Maybe just use escaped utf encoding or hash it
-        # Must be an idempotent operation
-        return re.sub(r"[!@#/$%^&*()\-+\[\]]", "_", str)
-
-    @classmethod
     def sanitize_model(cls, model: ModelProto) -> ModelProto:
         '''Mutates model to sanitize layer names'''
         for i in range(len(model.graph.node)):
             for j in range(len(model.graph.node[i].input)):
-                model.graph.node[i].input[j] = cls.sanitize_string(model.graph.node[i].input[j])
+                model.graph.node[i].input[j] = Environment.sanitize_string(model.graph.node[i].input[j])
             for j in range(len(model.graph.node[i].output)):
-                model.graph.node[i].output[j] = cls.sanitize_string(model.graph.node[i].output[j])
+                model.graph.node[i].output[j] = Environment.sanitize_string(model.graph.node[i].output[j])
 
         for i in range(len(model.graph.input)):
-            model.graph.input[i].name = cls.sanitize_string(model.graph.input[i].name)
+            model.graph.input[i].name = Environment.sanitize_string(model.graph.input[i].name)
         for i in range(len(model.graph.output)):
-            model.graph.output[i].name = cls.sanitize_string(model.graph.output[i].name)
+            model.graph.output[i].name = Environment.sanitize_string(model.graph.output[i].name)
         for i in range(len(model.graph.initializer)):
-            model.graph.initializer[i].name = cls.sanitize_string(model.graph.initializer[i].name)
+            model.graph.initializer[i].name = Environment.sanitize_string(model.graph.initializer[i].name)
+        model.graph.name = Environment.sanitize_string(model.graph.name)
         return model
 
 

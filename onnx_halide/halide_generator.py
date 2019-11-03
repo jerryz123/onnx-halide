@@ -39,13 +39,13 @@ class HalideNodeVisitor(BaseNodeVisitor):
 
         gen_name = "HalideNode_{}".format(self.outputs[0])
 
-        input_decls = '\n'.join(["Input<Buffer<{0}>> v_{1}{{\"v_{1}\", {2}}};".format(
+        input_decls = '\n'.join(["Input<Buffer<{0}>> {1}{{\"{1}\", {2}}};".format(
             VI(value_info[i]).t.c,
             i,
             len(VI(value_info[i]).shape),
             VI(value_info[i]).shape) for i in self.inputs if i])
 
-        output_decls = '\n'.join(["Output<Buffer<{0}>> v_{1}{{\"v_{1}\", {2}}};".format(
+        output_decls = '\n'.join(["Output<Buffer<{0}>> {1}{{\"{1}\", {2}}};".format(
             VI(value_info[i]).t.c,
             i,
             len(VI(value_info[i]).shape),
@@ -97,7 +97,7 @@ HALIDE_REGISTER_GENERATOR({0}, {0})
             ctype = vi.t.c
             shape = vi.shape
 
-            code.append("  Halide::Runtime::Buffer<{0}> {1}_buf(v_{1}, {{{2}}});".format(
+            code.append("  Halide::Runtime::Buffer<{0}> {1}_buf({1}, {{{2}}});".format(
                 ctype,
                 i,
                 JOIN_VARS([str(i) for i in shape])))
@@ -147,9 +147,9 @@ HALIDE_REGISTER_GENERATOR({0}, {0})
 
 class HalideUnaryVisitor(HalideNodeVisitor):
     def generate_alg(self, dim_vars):
-        ip0_expr  = self.generate_funcref("v_" + self.inputs[0], dim_vars)
+        ip0_expr  = self.generate_funcref(self.inputs[0], dim_vars)
         unop_expr = self.expr.format(ip0_expr)
-        op0_expr  = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        op0_expr  = self.generate_funcref(self.outputs[0], dim_vars)
         return [self.generate_assign(op0_expr, unop_expr)]
 
 
@@ -220,9 +220,9 @@ class HalideClipVisitor(HalideUnaryVisitor):
         max_v = None
         n = len(self.inputs)
         if n > 1 and self.inputs[1]:
-            min_v = "v_{}()".format(self.inputs[1])
+            min_v = "{}()".format(self.inputs[1])
         if n > 2 and self.inputs[2]:
-            max_v = "v_{}()".format(self.inputs[2])
+            max_v = "{}()".format(self.inputs[2])
         min_v = min_v or "Expr({})".format(min_v or VI(self.value_info[self.inputs[0]]).t.c_min)
         max_v = max_v or "Expr({})".format(max_v or VI(self.value_info[self.inputs[0]]).t.c_max)
         return "clamp({{}}, {}, {})".format(min_v, max_v)
@@ -387,15 +387,15 @@ class HalideBinaryVisitor(HalideNodeVisitor):
         ip0_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
                         zip(ip0.shape,
                             dim_vars[-len(ip0.shape):])]
-        ip0_expr     = self.generate_funcref("v_" + self.inputs[0], ip0_dim_vars)
+        ip0_expr     = self.generate_funcref(self.inputs[0], ip0_dim_vars)
         ip1_dim_vars = [(dvar if dim > 1 else "0") for dim, dvar in
                         zip(ip1.shape,
                             dim_vars[-len(ip1.shape):])]
-        ip1_expr     = self.generate_funcref("v_" + self.inputs[1], ip1_dim_vars)
+        ip1_expr     = self.generate_funcref(self.inputs[1], ip1_dim_vars)
 
         expr         = self.expr.format(ip0_expr, ip1_expr)
 
-        op0_expr     = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        op0_expr     = self.generate_funcref(self.outputs[0], dim_vars)
         return [self.generate_assign(op0_expr, expr)]
 
 class HalideAddVisitor(HalideBinaryVisitor):
@@ -497,8 +497,8 @@ class HalideArgMVisitor(HalideNodeVisitor):
                         else red_vars[0]) \
                         for i, dvar in enumerate(dim_vars)]
 
-        op_expr = self.generate_funcref("v_" + self.outputs[0], op_dim_vars)
-        ip_expr = self.generate_funcref("v_" + self.inputs[0], ip_dim_vars)
+        op_expr = self.generate_funcref(self.outputs[0], op_dim_vars)
+        ip_expr = self.generate_funcref(self.inputs[0], ip_dim_vars)
 
         expr = "{}({})[0]".format(self.argm_type, ip_expr)
         expr = self.generate_cast(op0.t.c, expr)
@@ -568,7 +568,7 @@ class HalidePoolVisitor(HalideNodeVisitor):
                            [()]*n_ign_dims_ + dilations_)]
 
         p_code, padded = self.generate_padded(
-            "pad", "v_" + self.inputs[0],
+            "pad", self.inputs[0],
             self.pad_const,
             [(0, s) \
              if i >= n_ign_dims_ else \
@@ -577,7 +577,7 @@ class HalidePoolVisitor(HalideNodeVisitor):
         code.append(p_code)
 
 
-        lhs = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        lhs = self.generate_funcref(self.outputs[0], dim_vars)
         r_code, rhs = self.generate_pool_rhs(dim_vars, red_vars, ip_vars, pool_shape_,
                                              n_ign_dims_, strides_, pads_,
                                              self.generate_funcref(padded, ip_vars))
@@ -665,7 +665,7 @@ class HalideMaxPoolVisitor(HalidePoolVisitor):
                                   [{}]*n_ign_dims + strides,
                                   [{}]*n_ign_dims + pads,
                                   prod[::-1]))]
-            o_asn = self.generate_assign(self.generate_funcref("v_" + self.outputs[1],
+            o_asn = self.generate_assign(self.generate_funcref(self.outputs[1],
                                                                dim_vars),
                                          self.generate_cast(op1.t.c, "+".join(maxed_vars)))
             code = [d_code, d_asn, o_asn]
@@ -734,7 +734,7 @@ class HalideBaseConvVisitor(HalideNodeVisitor):
 
         bias_expr = self.generate_bias([dim_vars[1]])
 
-        w_expr = self.generate_funcref("v_" + self.inputs[1], w_vars)
+        w_expr = self.generate_funcref(self.inputs[1], w_vars)
 
         rhs = self.generate_cast(op0.t.c,
                                  "sum({})+{}".format(
@@ -742,7 +742,7 @@ class HalideBaseConvVisitor(HalideNodeVisitor):
                                                         "{}*{}".format(padded_expr, w_expr)),
                                      bias_expr))
         code.append(self.generate_assign(
-            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            self.generate_funcref(self.outputs[0], dim_vars),
             rhs))
         return code
 
@@ -750,12 +750,12 @@ class HalideConvVisitor(HalideBaseConvVisitor):
     op_type     = "Conv"
     def generate_bias(self, dim_vars):
         if len(self.inputs) == 3:
-            return self.generate_funcref("v_" + self.inputs[2], dim_vars)
+            return self.generate_funcref(self.inputs[2], dim_vars)
         else:
             return "0"
 
     def generate_activation(self, dim_vars):
-        return [], "v_" + self.inputs[0]
+        return [], self.inputs[0]
 
 HalideGraphVisitor.register(HalideConvVisitor)
 
@@ -770,8 +770,8 @@ class HalideConvIntegerVisitor(HalideBaseConvVisitor):
             code, act = self.generate_funcdecl("a_{}".format(self.inputs[0]))
             code = [code,
                     self.generate_assign(self.generate_funcref(act, dim_vars),
-                                         "{}-v_{}()".format(
-                                             self.generate_funcref("v_" + self.inputs[0], dim_vars),
+                                         "{}-{}()".format(
+                                             self.generate_funcref(self.inputs[0], dim_vars),
                                              self.inputs[2]))]
 
             return code, act
@@ -817,10 +817,10 @@ class HalideConvTransposeVisitor(HalideNodeVisitor):
 
 
         r_code, red_vars = self.generate_rdom("r", [(0, i) for i in ip0.shape[1:]])
-        pw_code, pad_w = self.generate_padded("pad_w", "v_" + self.inputs[1], 0,
+        pw_code, pad_w = self.generate_padded("pad_w", self.inputs[1], 0,
                                               [("Expr()","Expr()")]*2 + \
                                               [(0, s) for s in ip1.shape[2:]])
-        pi_code, pad_i = self.generate_padded("pad_i", "v_" + self.inputs[0], 0,
+        pi_code, pad_i = self.generate_padded("pad_i", self.inputs[0], 0,
                                               [("Expr()","Expr()")]*2 + \
                                               [(0, s) for s in ip0.shape[2:]])
 
@@ -864,12 +864,12 @@ class HalideConvTransposeVisitor(HalideNodeVisitor):
                         op_pads,
                         pads)]
         if bias:
-            bias_expr = "+v_{}".format(self.generate_funcref(bias,
+            bias_expr = "+{}".format(self.generate_funcref(bias,
                                                              [dim_vars[1]]))
         else:
             bias_expr = ""
 
-        lhs = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        lhs = self.generate_funcref(self.outputs[0], dim_vars)
         rhs = "sum(select({},{},0)*{}){}".format(
             "&&".join(sel_expr),
             self.generate_funcref(pad_i, ip_vars),
@@ -892,18 +892,18 @@ class HalideBatchNormVisitor(HalideNodeVisitor):
         var  = self.inputs[4]
         op0  = VI(self.value_info[self.outputs[0]])
 
-        lhs    = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        lhs    = self.generate_funcref(self.outputs[0], dim_vars)
 
-        s_expr    = self.generate_funcref("v_" + s, [dim_vars[1]])
-        x_expr    = self.generate_funcref("v_" + x, dim_vars)
-        mean_expr = self.generate_funcref("v_" + mean, [dim_vars[1]])
-        var_expr  = self.generate_funcref("v_" + var, [dim_vars[1]])
-        bias_expr = self.generate_funcref("v_" + bias, [dim_vars[1]])
+        s_expr    = self.generate_funcref(s, [dim_vars[1]])
+        x_expr    = self.generate_funcref(x, dim_vars)
+        mean_expr = self.generate_funcref(mean, [dim_vars[1]])
+        var_expr  = self.generate_funcref(var, [dim_vars[1]])
+        bias_expr = self.generate_funcref(bias, [dim_vars[1]])
         eps_expr  = self.generate_cast(op0.t.c, self.eps_)
         rhs = "{}*(({}-{})/sqrt({}+{}))+{}".format(
             s_expr, x_expr, mean_expr, var_expr, eps_expr, bias_expr)
         return [self.generate_assign(self.generate_funcref(
-            "v_" + self.outputs[0],
+            self.outputs[0],
             dim_vars), rhs)]
 HalideGraphVisitor.register(HalideBatchNormVisitor)
 
@@ -914,24 +914,24 @@ class HalideConcatVisitor(HalideNodeVisitor):
 
     def generate_alg(self, dim_vars):
         code = [self.generate_assign(
-            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            self.generate_funcref(self.outputs[0], dim_vars),
             "undef<{}>()".format(VI(self.value_info[self.outputs[0]]).t.c))]
-        prev_s = 0
+        pres = 0
         for i, ip in enumerate(self.inputs):
             ipvi = VI(self.value_info[ip])
 
             r_code, red_var = self.generate_rdom(str(i),
-                                                 [(prev_s, ipvi.shape[self.axis_])])
+                                                 [(pres, ipvi.shape[self.axis_])])
             red_var = red_var[0]
             code.append(r_code)
             op_vars = list(dim_vars)
             op_vars[self.axis_] = red_var
             ip_vars = list(dim_vars)
-            ip_vars[self.axis_] = "{}-{}".format(red_var, prev_s)
-            prev_s += ipvi.shape[self.axis_]
+            ip_vars[self.axis_] = "{}-{}".format(red_var, pres)
+            pres += ipvi.shape[self.axis_]
             code.append(self.generate_assign(
-                self.generate_funcref("v_" + self.outputs[0], op_vars),
-                self.generate_funcref("v_" + ip, ip_vars)))
+                self.generate_funcref(self.outputs[0], op_vars),
+                self.generate_funcref(ip, ip_vars)))
         return code
 HalideGraphVisitor.register(HalideConcatVisitor)
 
@@ -961,23 +961,23 @@ class HalideDepthToSpaceVisitor(HalideNodeVisitor):
                            dim_vars[2], self.blocksize_),
                        "cast<int>({}/{})".format(
                            dim_vars[3], self.blocksize_)]
-        return [self.generate_assign(self.generate_funcref("v_" + self.outputs[0],
+        return [self.generate_assign(self.generate_funcref(self.outputs[0],
                                                            dim_vars),
-                                     self.generate_funcref("v_" + self.inputs[0],
+                                     self.generate_funcref(self.inputs[0],
                                                            ip_vars))]
 HalideGraphVisitor.register(HalideDepthToSpaceVisitor)
 
 class HalideDequantizeLinearVisitor(HalideNodeVisitor):
     op_type = "DequantizeLinear"
     def generate_alg(self, dim_vars):
-        rhs = self.generate_funcref("v_" + self.inputs[0], dim_vars)
+        rhs = self.generate_funcref(self.inputs[0], dim_vars)
         if len(self.inputs) >= 3:
-            rhs = "({}-v_{}())".format(self.generate_cast(VI(self.value_info[self.outputs[0]]).t.c,
+            rhs = "({}-{}())".format(self.generate_cast(VI(self.value_info[self.outputs[0]]).t.c,
                                                           rhs),
                                        self.inputs[2])
 
-        rhs = "{}*v_{}()".format(rhs, self.inputs[1])
-        return [self.generate_assign(self.generate_funcref("v_" + self.outputs[0],
+        rhs = "{}*{}()".format(rhs, self.inputs[1])
+        return [self.generate_assign(self.generate_funcref(self.outputs[0],
                                                            dim_vars),
                                      rhs)]
 HalideGraphVisitor.register(HalideDequantizeLinearVisitor)
@@ -991,28 +991,28 @@ class HalideDynamicQuantizeLinearVisitor(HalideNodeVisitor):
         code = [r_code,
                 self.generate_assign("Expr f_min",
                                      "min(0, minimum({}))".format(
-                                         self.generate_funcref("v_" + self.inputs[0],
+                                         self.generate_funcref(self.inputs[0],
                                                                rdom))),
                 self.generate_assign("Expr f_max",
                                      "max(0, maximum({}))".format(
-                                         self.generate_funcref("v_" + self.inputs[0],
+                                         self.generate_funcref(self.inputs[0],
                                                                rdom))),
-                self.generate_assign(self.generate_funcref("v_" + self.outputs[1], []),
+                self.generate_assign(self.generate_funcref(self.outputs[1], []),
                                      "({} / {})".format(
                                          self.generate_cast("float", "f_max - f_min"),
                                          self.generate_cast("float", "255"))),
-                self.generate_assign(self.generate_funcref("v_" + self.outputs[2], []),
+                self.generate_assign(self.generate_funcref(self.outputs[2], []),
                                      self.generate_cast("uint8_t",
                                                         "clamp(round((0 - f_min) / {}), 0, 255)".format(
-                                                            self.generate_funcref("v_" + self.outputs[1], [])))),
-                self.generate_assign(self.generate_funcref("v_" + self.outputs[0],
+                                                            self.generate_funcref(self.outputs[1], [])))),
+                self.generate_assign(self.generate_funcref(self.outputs[0],
                                                            dim_vars),
                                      "clamp({}, 0, 255)".format(self.generate_cast(
                                          "uint8_t",
                                          "round({} / {}) + {}".format(
-                                             self.generate_funcref("v_" + self.inputs[0], dim_vars),
-                                             self.generate_funcref("v_" + self.outputs[1], []),
-                                             self.generate_funcref("v_" + self.outputs[2], [])))))
+                                             self.generate_funcref(self.inputs[0], dim_vars),
+                                             self.generate_funcref(self.outputs[1], []),
+                                             self.generate_funcref(self.outputs[2], [])))))
         ]
 
         return code
@@ -1026,7 +1026,7 @@ class HalideFeaturemaxVisitor(HalideNodeVisitor):
                                               [(0, s) for s in ip0.shape[self.axis_:]])
         ip_vars = dim_vars[:self.axis_] + red_vars
 
-        lhs = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        lhs = self.generate_funcref(self.outputs[0], dim_vars)
         rhs_code, rhs = self.generate_rhs(dim_vars, ip_vars, red_vars)
         return [r_code] + rhs_code + [self.generate_assign(lhs, rhs)]
 
@@ -1036,7 +1036,7 @@ class HalideHardmaxVisitor(HalideFeaturemaxVisitor):
         op0 = VI(self.value_info[self.outputs[0]])
         code = ["Tuple {}_am = argmax({});".format(
             self.outputs[0],
-            self.generate_funcref("v_" + self.inputs[0], ip_vars))]
+            self.generate_funcref(self.inputs[0], ip_vars))]
         return code, self.generate_cast(op0.t.c,
                                         "&&".join(
                                             ["({}_am[{}]=={})".format(self.outputs[0],
@@ -1052,8 +1052,8 @@ class HalideLogSoftmaxVisitor(HalideFeaturemaxVisitor):
         d_code, norm_ip = self.generate_funcdecl("norm_ip")
         a_code = self.generate_assign(self.generate_funcref(norm_ip, dim_vars),
                                       "{}-maximum({})".format(
-                                          self.generate_funcref("v_" + self.inputs[0], dim_vars),
-                                          self.generate_funcref("v_" + self.inputs[0], ip_vars)))
+                                          self.generate_funcref(self.inputs[0], dim_vars),
+                                          self.generate_funcref(self.inputs[0], ip_vars)))
         return [d_code, a_code], "({}-log(sum(exp({}))))".format(
             self.generate_funcref(norm_ip, dim_vars),
             self.generate_funcref(norm_ip, ip_vars))
@@ -1065,11 +1065,11 @@ class HalideSoftmaxVisitor(HalideFeaturemaxVisitor):
         m_code, max_x = self.generate_funcdecl("max_x")
         m_asn = self.generate_assign(self.generate_funcref(max_x, dim_vars),
                                      "maximum({})".format(self.generate_funcref(
-                                         "v_" + self.inputs[0], ip_vars)))
+                                         self.inputs[0], ip_vars)))
         e_code, exp_x = self.generate_funcdecl("exp_x")
         e_asn = self.generate_assign(self.generate_funcref(exp_x, dim_vars),
                                      "exp({}-{})".format(
-                                         self.generate_funcref("v_" + self.inputs[0], dim_vars),
+                                         self.generate_funcref(self.inputs[0], dim_vars),
                                          self.generate_funcref(max_x, dim_vars)))
         return [m_code, m_asn, e_code, e_asn], "{}/sum({})".format(
             self.generate_funcref(exp_x, dim_vars),
@@ -1097,8 +1097,8 @@ class HalideFlattenVisitor(HalideNodeVisitor):
                     + ["cast<int>(floor({}/{}))%{}".format(dim_vars[1], prod, ips) \
                        for ips, prod in zip(pprevs, pprods[1:])]
         return [self.generate_assign(
-            self.generate_funcref("v_" + self.outputs[0], dim_vars),
-            self.generate_funcref("v_" + self.inputs[0], ip_vars))]
+            self.generate_funcref(self.outputs[0], dim_vars),
+            self.generate_funcref(self.inputs[0], ip_vars))]
 HalideGraphVisitor.register(HalideFlattenVisitor)
 
 class HalideGatherVisitor(HalideNodeVisitor):
@@ -1114,12 +1114,12 @@ class HalideGatherVisitor(HalideNodeVisitor):
                   + [self.generate_cast(
                       "int",
                       "{}%{}".format(
-                          self.generate_funcref("v_" + self.inputs[1], id_vars),
+                          self.generate_funcref(self.inputs[1], id_vars),
                           ip0.shape[self.axis_]))] \
                   + dim_vars[ip1.dims+self.axis_:]
         return [self.generate_assign(
-            self.generate_funcref("v_" + self.outputs[0], dim_vars),
-            self.generate_funcref("v_" + self.inputs[0], ip_vars))]
+            self.generate_funcref(self.outputs[0], dim_vars),
+            self.generate_funcref(self.inputs[0], ip_vars))]
 HalideGraphVisitor.register(HalideGatherVisitor)
 
 class HalideGatherElementsVisitor(HalideNodeVisitor):
@@ -1134,13 +1134,13 @@ class HalideGatherElementsVisitor(HalideNodeVisitor):
                    self.generate_cast(
                        "int",
                        "{}%{}".format(
-                           self.generate_funcref("v_" + self.inputs[1], dim_vars),
+                           self.generate_funcref(self.inputs[1], dim_vars),
                            ip0.shape[self.axis_])) \
                    for axis, dv in enumerate(dim_vars)]
 
         return [self.generate_assign(
-            self.generate_funcref("v_" + self.outputs[0], dim_vars),
-            self.generate_funcref("v_" + self.inputs[0], ip_vars))]
+            self.generate_funcref(self.outputs[0], dim_vars),
+            self.generate_funcref(self.inputs[0], ip_vars))]
 HalideGraphVisitor.register(HalideGatherElementsVisitor)
 
 class HalideGatherNDVisitor(HalideNodeVisitor):
@@ -1156,15 +1156,15 @@ class HalideGatherNDVisitor(HalideNodeVisitor):
                 return self.generate_cast(
                     "int",
                     "{}%{}".format(
-                        self.generate_funcref("v_" + self.inputs[1],
+                        self.generate_funcref(self.inputs[1],
                                               dim_vars[:ip1.dims-1] + [str(axis)]),
                         ip0.shape[axis]))
             else:
                 return dim_vars[axis - n_ref_axes + ip1.dims-1]
         ip_vars = [get_ip_var(a) for a in range(ip0.dims)]
         return [self.generate_assign(
-            self.generate_funcref("v_" + self.outputs[0], dim_vars),
-            self.generate_funcref("v_" + self.inputs[0], ip_vars))]
+            self.generate_funcref(self.outputs[0], dim_vars),
+            self.generate_funcref(self.inputs[0], ip_vars))]
 HalideGraphVisitor.register(HalideGatherNDVisitor)
 
 class HalideGemmVisitor(HalideNodeVisitor):
@@ -1194,19 +1194,19 @@ class HalideGemmVisitor(HalideNodeVisitor):
 
         if self.transA_:
             na_assign = self.generate_assign(self.generate_funcref(norm_A, dim_vars[:2]),
-                                             self.generate_funcref("v_" + self.inputs[0], dim_vars[:2][::-1]))
+                                             self.generate_funcref(self.inputs[0], dim_vars[:2][::-1]))
         else:
-            na_assign = self.generate_assign(norm_A, "v_" + self.inputs[0])
+            na_assign = self.generate_assign(norm_A, self.inputs[0])
 
         if self.transB_:
             nb_assign = self.generate_assign(self.generate_funcref(norm_B, dim_vars[:2]),
-                                             self.generate_funcref("v_" + self.inputs[1], dim_vars[:2][::-1]))
+                                             self.generate_funcref(self.inputs[1], dim_vars[:2][::-1]))
         else:
-            nb_assign = self.generate_assign(norm_B, "v_" + self.inputs[1])
+            nb_assign = self.generate_assign(norm_B, self.inputs[1])
 
         if C:
             nc_assign = self.generate_assign(self.generate_funcref(norm_C, dim_vars),
-                                             self.generate_funcref("v_" + self.inputs[2],
+                                             self.generate_funcref(self.inputs[2],
                                                                    [dv if cs > 1 else "0" \
                                                                     for dv, cs \
                                                                     in zip(dim_vars[-C.dims:], C.shape)]))
@@ -1217,7 +1217,7 @@ class HalideGemmVisitor(HalideNodeVisitor):
 
         code = [r_code, na_code, nb_code, nc_code,
                 na_assign, nb_assign, nc_assign,
-                self.generate_assign(self.generate_funcref("v_" + self.outputs[0], dim_vars),
+                self.generate_assign(self.generate_funcref(self.outputs[0], dim_vars),
                                      "{}*{}+{}*sum({}*{})".format(
                                          beta,
                                          self.generate_funcref(norm_C, dim_vars) if C else "0",
@@ -1240,25 +1240,25 @@ class HalideInstanceNormalizationVisitor(HalideNodeVisitor):
         f_code, mean_f = self.generate_funcdecl("mean_f")
         asn1 = self.generate_assign(self.generate_funcref(mean_f, dim_vars[:2]),
                                     "sum({})/{}".format(
-                                        self.generate_funcref("v_" + self.inputs[0], dim_vars[:2] + red_vars),
+                                        self.generate_funcref(self.inputs[0], dim_vars[:2] + red_vars),
                                         np.prod(ip0.shape[2:])))
 
-        v_code, var_f = self.generate_funcdecl("var_f")
+        code, var_f = self.generate_funcdecl("var_f")
         asn2 = self.generate_assign(self.generate_funcref(var_f, dim_vars[:2]),
                                     "(sum(pow({},2))/{} - pow({},2))".format(
-                                        self.generate_funcref("v_" + self.inputs[0], dim_vars[:2] + red_vars),
+                                        self.generate_funcref(self.inputs[0], dim_vars[:2] + red_vars),
                                         np.prod(ip0.shape[2:]),
                                         self.generate_funcref(mean_f, dim_vars[:2])))
 
-        asn3 = self.generate_assign(self.generate_funcref("v_" + self.outputs[0], dim_vars),
+        asn3 = self.generate_assign(self.generate_funcref(self.outputs[0], dim_vars),
                           "({}*({}-{})/(sqrt({}+{}))+{})".format(
-                              self.generate_funcref("v_" + self.inputs[1], [dim_vars[1]]),
-                              self.generate_funcref("v_" + self.inputs[0], dim_vars),
+                              self.generate_funcref(self.inputs[1], [dim_vars[1]]),
+                              self.generate_funcref(self.inputs[0], dim_vars),
                               self.generate_funcref(mean_f, dim_vars[:2]),
                               self.generate_funcref(var_f, dim_vars[:2]),
                               eps,
-                              self.generate_funcref("v_" + self.inputs[2], [dim_vars[1]])))
-        return [r_code, f_code, asn1, v_code, asn2, asn3]
+                              self.generate_funcref(self.inputs[2], [dim_vars[1]])))
+        return [r_code, f_code, asn1, code, asn2, asn3]
 HalideGraphVisitor.register(HalideInstanceNormalizationVisitor)
 
 class HalideLRNVisitor(HalideNodeVisitor):
@@ -1272,7 +1272,7 @@ class HalideLRNVisitor(HalideNodeVisitor):
         r_code, red_var = self.generate_rdom("r", [(-floor((self.size_-1)/2),
                                                     self.size_)])
         p_code, padded = self.generate_padded("pad",
-                                              "v_" + self.inputs[0],
+                                              self.inputs[0],
                                               0,
                                               [("Expr()", "Expr()") if i != 1 else \
                                                (0, ip0.shape[1]) for i in \
@@ -1289,9 +1289,9 @@ class HalideLRNVisitor(HalideNodeVisitor):
 
         opt = VI(self.value_info[self.outputs[0]]).t.c
         a2_code = self.generate_assign(
-            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            self.generate_funcref(self.outputs[0], dim_vars),
                           "{}/pow({}+({}/{})*{},{})".format(
-                              self.generate_funcref("v_" + self.inputs[0], dim_vars),
+                              self.generate_funcref(self.inputs[0], dim_vars),
                               self.generate_cast(opt, self.bias_),
                               self.generate_cast(opt, self.alpha_),
                               self.generate_cast(opt, self.size_),
@@ -1335,7 +1335,7 @@ class HalideBaseMatMulVisitor(HalideNodeVisitor):
         a_code, a = self.get_a(dim_vars)
         b_code, b = self.get_b(dim_vars)
         return [r_code] + a_code + b_code + \
-            [self.generate_assign(self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            [self.generate_assign(self.generate_funcref(self.outputs[0], dim_vars),
                                   "sum({})".format(
                                       self.generate_cast(
                                           op.t.c,
@@ -1346,9 +1346,9 @@ class HalideBaseMatMulVisitor(HalideNodeVisitor):
 class HalideMatMulVisitor(HalideBaseMatMulVisitor):
     op_type = "MatMul"
     def get_a(self, dim_vars):
-        return [], "v_" + self.inputs[0]
+        return [], self.inputs[0]
     def get_b(self, dim_vars):
-        return [], "v_" + self.inputs[1]
+        return [], self.inputs[1]
 HalideGraphVisitor.register(HalideMatMulVisitor)
 
 class HalideMatMulIntegerVisitor(HalideBaseMatMulVisitor):
@@ -1364,12 +1364,12 @@ class HalideMatMulIntegerVisitor(HalideBaseMatMulVisitor):
                                          "{}-{}".format(
                                              self.generate_cast(
                                                  op.t.c,
-                                                 self.generate_funcref("v_" + self.inputs[0], dim_vars)),
-                                             self.generate_funcref("v_" + self.inputs[2],
+                                                 self.generate_funcref(self.inputs[0], dim_vars)),
+                                             self.generate_funcref(self.inputs[2],
                                                                    [dim_vars[-2]] if is_array else ["0"])))]
             return code, a
         else:
-            return [], "v_" + self.inputs[0]
+            return [], self.inputs[0]
     def get_b(self, dim_vars):
         op = VI(self.value_info[self.outputs[0]])
         if len(self.inputs) >= 4 and self.inputs[3]:
@@ -1381,19 +1381,19 @@ class HalideMatMulIntegerVisitor(HalideBaseMatMulVisitor):
                                          "{}-{}".format(
                                              self.generate_cast(
                                                  op.t.c,
-                                                 self.generate_funcref("v_" + self.inputs[1], dim_vars)),
-                                             self.generate_funcref("v_" + self.inputs[3],
+                                                 self.generate_funcref(self.inputs[1], dim_vars)),
+                                             self.generate_funcref(self.inputs[3],
                                                                    [dim_vars[-1]] if is_array else ["0"])))]
             return code, b
         else:
-            return [], "v_" + self.inputs[1]
+            return [], self.inputs[1]
 HalideGraphVisitor.register(HalideMatMulIntegerVisitor)
 
 class HalideVarVisitor(HalideNodeVisitor):
     def generate_alg(self, dim_vars):
-        lhs = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        lhs = self.generate_funcref(self.outputs[0], dim_vars)
         if len(self.inputs) == 1:
-            rhs = self.generate_funcref("v_" + self.inputs[0], dim_vars)
+            rhs = self.generate_funcref(self.inputs[0], dim_vars)
         else:
             ip_vars = []
             for i in self.inputs:
@@ -1407,7 +1407,7 @@ class HalideMinMaxVisitor(HalideVarVisitor):
     def generate_rhs(self, dim_vars, ip_vars):
         return "{}({})".format(
             self.op_type.lower(),
-            ",".join([self.generate_funcref("v_" + ip, ipv) \
+            ",".join([self.generate_funcref(ip, ipv) \
                       for ip, ipv in zip(self.inputs, ip_vars)]))
 
 class HalideMaxVisitor(HalideMinMaxVisitor):
@@ -1423,7 +1423,7 @@ class HalideMeanVisitor(HalideVarVisitor):
     def generate_rhs(self, dim_vars, ip_vars):
         op0 = VI(self.value_info[self.outputs[0]])
         return "({})/{}".format(
-            "+".join([self.generate_funcref("v_" + ip, ipv) for\
+            "+".join([self.generate_funcref(ip, ipv) for\
                       ip, ipv in zip(self.inputs, ip_vars)]),
             self.generate_cast(op0.t.c, len(self.inputs)))
 HalideGraphVisitor.register(HalideMeanVisitor)
@@ -1432,7 +1432,7 @@ class HalideSumVisitor(HalideVarVisitor):
     op_type = "Sum"
     def generate_rhs(self, dim_vars, ip_vars):
         return "{}".format(
-            "+".join([self.generate_funcref("v_" + ip, ipv) for \
+            "+".join([self.generate_funcref(ip, ipv) for \
                       ip, ipv in zip(self.inputs, ip_vars)]))
 HalideGraphVisitor.register(HalideSumVisitor)
 
@@ -1448,31 +1448,31 @@ class HalidePadVisitor(HalideNodeVisitor):
         lhs = "Func {}_pad".format(self.outputs[0])
         if self.mode_ == "constant":
             if len(self.inputs) >= 2 and self.inputs[2]:
-                const = "v_{}()".format(self.inputs[2])
+                const = "{}()".format(self.inputs[2])
             else:
                 const = self.generate_cast(op.t.c, "Expr(0)")
-            rhs = "constant_exterior(v_{},{},{{{}}})".format(
+            rhs = "constant_exterior({},{},{{{}}})".format(
                 self.inputs[0], const,
                 JOIN_VARS(["{{0,{}}}".format(ips) for ips in ip.shape]))
         elif self.mode_ == "edge":
-            rhs = "repeat_edge(v_{},{{{}}})".format(
+            rhs = "repeat_edge({},{{{}}})".format(
                 self.inputs[0],
                 JOIN_VARS(["{{0,{}}}".format(ips) for ips in ip.shape]))
         elif self.mode_ == "reflect":
-            rhs = "mirror_interior(v_{},{{{}}})".format(
+            rhs = "mirror_interior({},{{{}}})".format(
                 self.inputs[0],
                 JOIN_VARS(["{{0,{}}}".format(ips) if ips > 1 else "{Expr(),Expr()}"\
                           for ips in ip.shape]))
         code = [self.generate_assign(lhs, rhs)]
 
-        pads = [self.generate_cast("int", "v_{}({})".format(self.inputs[1], i)) for i in range(2*len(ip.shape))]
+        pads = [self.generate_cast("int", "{}({})".format(self.inputs[1], i)) for i in range(2*len(ip.shape))]
         pads = list(zip(pads, pads[::-1]))[:len(pads)//2]
         n_ign_dims = len(ip.shape) - len(pads)
 
         ip_vars = ["{}-{}".format(dv, pad[0]) if pad else dv \
                    for dv, pad in zip(dim_vars, [{}]*n_ign_dims+pads)]
 
-        op_expr = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        op_expr = self.generate_funcref(self.outputs[0], dim_vars)
         ip_expr = self.generate_funcref("{}_pad".format(self.outputs[0]),
                                         ip_vars)
         code.append(self.generate_assign(op_expr, ip_expr))
@@ -1483,16 +1483,16 @@ HalideGraphVisitor.register(HalidePadVisitor)
 class HalideQuantizeLinearVisitor(HalideNodeVisitor):
     op_type = "QuantizeLinear"
     def generate_alg(self, dim_vars):
-        zero_point = self.generate_funcref("v_" + self.inputs[2], []) \
+        zero_point = self.generate_funcref(self.inputs[2], []) \
                      if len(self.inputs) >= 3 and self.inputs[2] else "0"
         op_type = VI(self.value_info[self.outputs[0]]).t.c
         return [self.generate_assign(
-            self.generate_funcref("v_" + self.outputs[0], dim_vars),
+            self.generate_funcref(self.outputs[0], dim_vars),
             self.generate_cast(op_type,
                                "clamp(round({}/{}) + {}, 0, 255)".format(
                                    self.generate_funcref(
-                                       "v_" + self.inputs[0], dim_vars),
-                                   self.generate_funcref("v_" + self.inputs[1], []),
+                                       self.inputs[0], dim_vars),
+                                   self.generate_funcref(self.inputs[1], []),
                                    zero_point)))]
 HalideGraphVisitor.register(HalideQuantizeLinearVisitor)
 
@@ -1502,7 +1502,7 @@ class HalideSqueezeVisitor(HalideNodeVisitor):
 
     def generate_alg(self, dim_vars: List[str]):
         op0 = VI(self.value_info[self.outputs[0]])
-        op0_expr = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        op0_expr = self.generate_funcref(self.outputs[0], dim_vars)
 
         ip0 = VI(self.value_info[self.inputs[0]])
         ip_vars = ["0"] * len(ip0.shape)
@@ -1510,7 +1510,7 @@ class HalideSqueezeVisitor(HalideNodeVisitor):
                           if i not in self.axes_],
                          dim_vars):
             ip_vars[i] = dv
-        ip0_expr = self.generate_funcref("v_" + self.inputs[0], ip_vars)
+        ip0_expr = self.generate_funcref(self.inputs[0], ip_vars)
 
         assgn = self.generate_assign(op0_expr, ip0_expr)
         return [assgn]
@@ -1522,12 +1522,12 @@ class HalideTransposeVisitor(HalideNodeVisitor):
 
     def generate_alg(self, dim_vars: List[str]):
         ip0 = VI(self.value_info[self.inputs[0]])
-        ip0_expr = self.generate_funcref("v_" + self.inputs[0], dim_vars)
+        ip0_expr = self.generate_funcref(self.inputs[0], dim_vars)
 
         op0 = VI(self.value_info[self.outputs[0]])
         perms = self.perms_ or range(ip0.dims)[::-1]
         op0_dim_vars = [ip0.shape[i] for i in perms]
-        op0_expr = self.generate_funcref("v_" + self.outputs[0],  [dim_vars[i] for i in perms])
+        op0_expr = self.generate_funcref(self.outputs[0],  [dim_vars[i] for i in perms])
 
         assgn = self.generate_assign(op0_expr, ip0_expr)
         return [assgn]
@@ -1539,7 +1539,7 @@ class HalideSizeVisitor(HalideNodeVisitor):
     def generate_alg(self, dim_vars: List[str]):
         ip0 = VI(self.value_info[self.inputs[0]])
         op0 = VI(self.value_info[self.outputs[0]])
-        op0_expr = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        op0_expr = self.generate_funcref(self.outputs[0], dim_vars)
         ip0_expr = self.generate_cast("int64_t", ip0.size)
         assgn = self.generate_assign(op0_expr, ip0_expr)
         return [assgn]
@@ -1558,8 +1558,8 @@ class HalideSplitVisitor(HalideNodeVisitor):
         for op, s in zip(self.outputs, self.split_):
             ip_vars = dim_vars.copy()
             ip_vars[self.axis_] += "+{}".format(s_sum)
-            op_expr = self.generate_funcref("v_" + op, dim_vars)
-            ip_expr = self.generate_funcref("v_" + self.inputs[0], ip_vars)
+            op_expr = self.generate_funcref(op, dim_vars)
+            ip_expr = self.generate_funcref(self.inputs[0], ip_vars)
             assgn = self.generate_assign(op_expr, ip_expr)
             code.append(assgn)
             s_sum += s
@@ -1572,7 +1572,7 @@ class HalideUnsqueezeGenerator(HalideNodeVisitor):
 
     def generate_alg(self, dim_vars: List[str]):
         op0 = VI(self.value_info[self.outputs[0]])
-        op0_expr = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        op0_expr = self.generate_funcref(self.outputs[0], dim_vars)
 
         ip0 = VI(self.value_info[self.inputs[0]])
         op_shape = ip0.shape
@@ -1581,7 +1581,7 @@ class HalideUnsqueezeGenerator(HalideNodeVisitor):
             op_shape.insert(i, 1)
             orig_s_.insert(i, 0)
         ip_vars = [dv for i, dv in enumerate(dim_vars) if orig_s_[i]]
-        ip0_expr = self.generate_funcref("v_" + self.inputs[0], ip_vars)
+        ip0_expr = self.generate_funcref(self.inputs[0], ip_vars)
         assgn = self.generate_assign(op0_expr, ip0_expr)
 
         return [assgn]
@@ -1592,7 +1592,7 @@ class HalideReshapeGenerator(HalideNodeVisitor):
 
     def generate_alg(self, dim_vars: List[str]):
         op0 = VI(self.value_info[self.outputs[0]])
-        op0_expr = self.generate_funcref("v_" + self.outputs[0], dim_vars)
+        op0_expr = self.generate_funcref(self.outputs[0], dim_vars)
 
         ip0 = VI(self.value_info[self.inputs[0]])
         prevs = ip0.shape[1:] + [1]
@@ -1602,7 +1602,7 @@ class HalideReshapeGenerator(HalideNodeVisitor):
                                                        ips) \
                    for ips, prod in \
                    zip(ip0.shape, prods)]
-        ip0_expr = self.generate_funcref("v_" + self.inputs[0], ip_vars)
+        ip0_expr = self.generate_funcref(self.inputs[0], ip_vars)
         flattened_decl, flattened_name = self.generate_funcdecl("flattened")
         code = [flattened_decl]
 
@@ -1649,10 +1649,10 @@ class HalideReduceVisitor(HalideNodeVisitor):
 
         return [r_code,
                 self.generate_assign(self.generate_funcref(
-                    "v_" + self.outputs[0], dim_vars),
+                    self.outputs[0], dim_vars),
                                      self.expr.format(
                                          self.generate_funcref(
-                                             "v_" + self.inputs[0], ip_vars)))]
+                                             self.inputs[0], ip_vars)))]
 
 class HalideReduceL1Visitor(HalideReduceVisitor):
     op_type = "ReduceL1"

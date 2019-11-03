@@ -9,12 +9,14 @@ from typing import Any, Dict, List, Set, Tuple
 from .types import VI
 from .environment_link import Environment
 from .buffer_manager import NaiveBufferManager
+from .environment_link import Environment
 
 class BaseVisitor:
     install_dir = os.environ['RISCV']
     cxx = "g++"
-    def __init__(self, temp_dir: str = "temp") -> None:
+    def __init__(self, temp_dir: str = "temp", debug = False) -> None:
         self.temp_dir = abspath(temp_dir)
+        self.debug = debug
         if not os.path.exists(self.temp_dir):
             os.makedirs(self.temp_dir)
 
@@ -54,12 +56,15 @@ class BaseGraphVisitor(BaseVisitor):
 
         code = []
         buffer_manager = NaiveBufferManager(value_info)
-        for node in graph.node:
+        for idx, node in enumerate(graph.node):
             node_outputs = list(node.output)
             generator = self.node_lookup[node.op_type](temp_dir=self.temp_dir)
             node_code, objects, headers = generator.visit(node, value_info)
             self.objects |= objects
             self.headers |= headers
+            op_name = Environment.sanitize_string(node.op_type.lower() + str(idx))
+            if self.debug:
+                code.append("   unsigned long {}_precycle = rd_cycle();".format(op_name))
 
             for op in list(node.output):
                 if op not in outputs and op in value_info:
@@ -67,12 +72,16 @@ class BaseGraphVisitor(BaseVisitor):
 
             for c in node_code:
                 code.append("  " + c)
+            
+            if self.debug:
+                code.append("   unsigned long {}_postcycle = rd_cycle();".format(op_name))
+                code.append("   printf(\"%lu cycles for layer {0}\\n\", {0}_postcycle - {0}_precycle);".format(op_name))
 
         cargs = []
         for vi in list(graph.input) + list(graph.output):
             name = vi.name
             vi   = VI(vi.type)
-            cargs.append("{}* v_{}".format(vi.t.c, name))
+            cargs.append("{}* {}".format(vi.t.c, name))
 
         code = ["void {}({}) {{".format(graph.name, ','.join(cargs))] + \
                code + \
@@ -80,6 +89,7 @@ class BaseGraphVisitor(BaseVisitor):
 
         api_header = '\n'.join(["#ifndef {}_H".format(graph.name),
                                 "#define {}_H".format(graph.name),
+                                "#include \"{}\"".format(Environment.get_debug_header(self.temp_dir)) if self.debug else "",
                                 "#include <stdint.h>".format(graph.name),
                                 "#define float16_t uint16_t",
                                 "void {}({});".format(graph.name, ','.join(cargs)),
@@ -143,7 +153,7 @@ class ConstantVisitor(BaseNodeVisitor):
 
 
         # TODO: Don't do memcpy. In that case just manipulate the pointer
-        code = ["memcpy(v_{0}, {1}, {1}_len);".format(self.outputs[0], ref_name)]
+        code = ["memcpy({0}, {1}, {1}_len);".format(self.outputs[0], ref_name)]
 
 
         return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
@@ -173,7 +183,7 @@ class ConstantOfShapeVisitor(BaseNodeVisitor):
         ofile, hfile, ref_name = Environment.compile_constant_object(
             gen_name, data, self.temp_dir)
 
-        code = ["memcpy(v_{0}, {1}, {1}_len);".format(
+        code = ["memcpy({0}, {1}, {1}_len);".format(
             self.outputs[0], ref_name)]
         return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
 BaseGraphVisitor.register(ConstantOfShapeVisitor)
@@ -194,7 +204,7 @@ class EyeLikeVisitor(BaseNodeVisitor):
         ofile, hfile, ref_name = Environment.compile_constant_object(
             gen_name, data, self.temp_dir)
 
-        code = ["memcpy(v_{0}, {1}, {1}_len);".format(
+        code = ["memcpy({0}, {1}, {1}_len);".format(
             self.outputs[0], ref_name)]
         return code, {ofile}, {"\"{}\"".format(hfile), "<string.h>"}
 BaseGraphVisitor.register(EyeLikeVisitor)
